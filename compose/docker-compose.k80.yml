@@ -1,0 +1,32 @@
+# Deployment für Tesla K80 (CC 3.7, Kepler) — CUDA 11
+# Nutzung: docker compose -f compose/docker-compose.k80.yml up -d
+
+services:
+  ollama:
+    image: ghcr.io/h3rb3rn/ollama-legacy:cuda11-legacy-latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - /opt/ollama:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=5m
+      # K80 hat nur 12 GB VRAM pro GPU (24 GB pro Karte, 2 GPUs/Karte)
+      # Kontext auf 8192 begrenzen für stabile VRAM-Nutzung bei 7B-Modellen
+      - OLLAMA_NUM_CTX=8192
+      - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s

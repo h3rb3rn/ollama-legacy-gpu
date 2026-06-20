@@ -1,0 +1,30 @@
+# Deployment für Tesla M10 / M60 (CC 5.2, Maxwell) — CUDA 12
+# Nutzung: docker compose -f compose/docker-compose.maxwell.yml up -d
+
+services:
+  ollama:
+    image: ghcr.io/h3rb3rn/ollama-legacy:cuda12-maxwell-latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - /opt/ollama:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=5m
+      # PTX-JIT-Kernel werden gecacht — kein Kalt-Start-Delay ab dem zweiten Run
+      - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s

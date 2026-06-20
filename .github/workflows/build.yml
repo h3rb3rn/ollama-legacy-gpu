@@ -1,0 +1,150 @@
+name: Build Ollama Legacy GPU Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dockerfiles/**'
+      - 'presets/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+    inputs:
+      ollama_version:
+        description: 'Ollama-Version (z.B. v0.9.0) oder "main" für HEAD'
+        required: false
+        default: 'latest'
+      force_rebuild:
+        description: 'Rebuild auch wenn Tag bereits existiert'
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [new-ollama-release]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/ollama-legacy
+
+jobs:
+  # ── Schritt 1: Aktuelle Ollama-Version ermitteln ────────────────────────────
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      short:   ${{ steps.resolve.outputs.short }}
+    steps:
+      - name: Ollama-Version auflösen
+        id: resolve
+        run: |
+          INPUT="${{ github.event.inputs.ollama_version || github.event.client_payload.version || 'latest' }}"
+          if [ "$INPUT" = "latest" ] || [ -z "$INPUT" ]; then
+            VERSION=$(curl -sf https://api.github.com/repos/ollama/ollama/releases/latest \
+              | jq -r '.tag_name')
+          else
+            VERSION="$INPUT"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "short=${VERSION#v}"  >> $GITHUB_OUTPUT
+          echo "Resolved Ollama version: $VERSION"
+
+  # ── Schritt 2: CUDA 12 Maxwell (M10/M60, CC 5.2) ───────────────────────────
+  build-cuda12-maxwell:
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login zu GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build und Push — cuda12-maxwell
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfiles/Dockerfile.cuda12-maxwell
+          push: true
+          build-args: |
+            OLLAMA_VERSION=${{ needs.resolve-version.outputs.version }}
+            JOBS=4
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-${{ needs.resolve-version.outputs.short }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-latest
+          cache-from: type=gha,scope=cuda12-maxwell
+          cache-to:   type=gha,scope=cuda12-maxwell,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 12, CC 5.2 (Tesla M10/M60)
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ── Schritt 3: CUDA 11 Legacy (K80 CC 3.7 + M10/M60 CC 5.2) ───────────────
+  build-cuda11-legacy:
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login zu GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build und Push — cuda11-legacy
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfiles/Dockerfile.cuda11-legacy
+          push: true
+          build-args: |
+            OLLAMA_VERSION=${{ needs.resolve-version.outputs.version }}
+            JOBS=4
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda11-legacy-${{ needs.resolve-version.outputs.short }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda11-legacy-latest
+          cache-from: type=gha,scope=cuda11-legacy
+          cache-to:   type=gha,scope=cuda11-legacy,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 11, CC 3.7+5.2 (Tesla K80/M10/M60)
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ── Schritt 4: Build-Summary ────────────────────────────────────────────────
+  summary:
+    needs: [resolve-version, build-cuda12-maxwell, build-cuda11-legacy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Summary erstellen
+        run: |
+          echo "## Ollama Legacy GPU Build — ${{ needs.resolve-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | GPU | CUDA | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| \`cuda12-maxwell-${{ needs.resolve-version.outputs.short }}\` | Tesla M10/M60 | 12.0.1 | ${{ needs.build-cuda12-maxwell.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`cuda11-legacy-${{ needs.resolve-version.outputs.short }}\` | Tesla K80+M10/M60 | 11.8.0 | ${{ needs.build-cuda11-legacy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pull-Befehle" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Maxwell (M10/M60) — CUDA 12" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ghcr.io/${{ env.IMAGE_NAME }}:cuda12-maxwell-${{ needs.resolve-version.outputs.short }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Kepler/Maxwell (K80/M10/M60) — CUDA 11" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ghcr.io/${{ env.IMAGE_NAME }}:cuda11-legacy-${{ needs.resolve-version.outputs.short }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,60 @@
+name: Upstream Ollama Release-Check
+
+on:
+  schedule:
+    # Jeden Montag um 06:17 UTC (off-peak, kein :00/:30 Stau)
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Aktuelle Ollama-Version abrufen
+        id: upstream
+        run: |
+          VERSION=$(curl -sf https://api.github.com/repos/ollama/ollama/releases/latest \
+            | jq -r '.tag_name')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Upstream: $VERSION"
+
+      - name: Letzte gebaute Version lesen
+        id: local
+        run: |
+          LAST=$(cat .last-built-version 2>/dev/null || echo "none")
+          echo "last=$LAST" >> $GITHUB_OUTPUT
+          echo "Zuletzt gebaut: $LAST"
+
+      - name: Neue Version erkannt → Build auslösen
+        if: steps.upstream.outputs.version != steps.local.outputs.last
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              event_type: 'new-ollama-release',
+              client_payload: {
+                version: '${{ steps.upstream.outputs.version }}'
+              }
+            });
+            console.log('Build-Workflow ausgelöst für ${{ steps.upstream.outputs.version }}');
+
+      - name: Versionsdatei aktualisieren
+        if: steps.upstream.outputs.version != steps.local.outputs.last
+        run: |
+          echo "${{ steps.upstream.outputs.version }}" > .last-built-version
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .last-built-version
+          git commit -m "chore: Ollama ${{ steps.upstream.outputs.version }} erkannt"
+          git push
+
+      - name: Kein Update nötig
+        if: steps.upstream.outputs.version == steps.local.outputs.last
+        run: echo "Bereits aktuell (${{ steps.upstream.outputs.version }}) — kein Build nötig."

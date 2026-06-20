@@ -1,0 +1,86 @@
+# dockerfiles/Dockerfile.cuda12-maxwell
+#
+# Ollama für Tesla M10 / M60 (Compute Capability 5.2, Maxwell)
+# CUDA 12.0.1 — niedrigstes CUDA 12, breiteste M10/M60-Treiberkompatibilität
+#
+# Das offizielle llama_cuda_v12_linux-Preset enthält bereits 50-virtual;52-virtual.
+# Wir verwenden CUDA 12.0.1 statt 12.5/12.8 damit ältere Treiber funktionieren.
+# GGML_CUDA_FA=OFF: Flash Attention erfordert CC >= 8.0.
+#
+# Build:
+#   docker build -f dockerfiles/Dockerfile.cuda12-maxwell \
+#     --build-arg OLLAMA_VERSION=v0.9.0 \
+#     --build-arg JOBS=8 \
+#     -t ghcr.io/<owner>/ollama-legacy:cuda12-maxwell-v0.9.0 .
+#
+# Optionale Argumente:
+#   CUDA_ARCHITECTURES  NVCC target list (default: Maxwell + alle neueren bis Blackwell)
+#   JOBS                Parallele Build-Jobs
+
+ARG CUDA12_VERSION=12.0.1
+
+# ── Stage 1: Build-Toolchain ──────────────────────────────────────────────────
+FROM nvidia/cuda:${CUDA12_VERSION}-devel-ubuntu22.04 AS builder
+
+ARG OLLAMA_VERSION=main
+ARG CUDA_ARCHITECTURES="50-virtual;52-virtual;60-virtual;61-virtual;70;75;80;86;89;90;90a"
+ARG JOBS=8
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CMAKE_GENERATOR=Ninja
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git curl ca-certificates ninja-build cmake ccache \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --depth=1 \
+    $([ "${OLLAMA_VERSION}" != "main" ] && echo "--branch ${OLLAMA_VERSION}") \
+    https://github.com/ollama/ollama.git . \
+    && echo "Ollama $(git rev-parse --short HEAD) / $(cat LLAMA_CPP_VERSION)"
+
+# Go — Version aus go.mod lesen
+RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
+    && curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" \
+       | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
+
+# CUDA v12 Runner bauen (preset enthält bereits 50-virtual;52-virtual für Maxwell)
+RUN --mount=type=cache,target=/root/.ccache \
+    cmake -S llama/server \
+          --preset llama_cuda_v12_linux \
+          -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
+          -DGGML_CUDA_FA=OFF \
+    && cmake --build build/llama-server-cuda_v12 \
+             --parallel "${JOBS}" \
+    && cmake --install build/llama-server-cuda_v12 \
+             --component llama-server \
+             --strip
+
+# Go-Binary
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -buildmode=pie -ldflags="-w -s" -o /bin/ollama .
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl libvulkan1 libopenblas0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /bin/ollama          /usr/bin/ollama
+COPY --from=builder /src/dist/lib/ollama /usr/lib/ollama
+
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV OLLAMA_HOST=0.0.0.0:11434
+
+EXPOSE 11434
+VOLUME ["/root/.ollama"]
+
+HEALTHCHECK --interval=30s --timeout=15s --retries=5 --start-period=90s \
+    CMD curl -sf http://localhost:11434/api/tags || exit 1
+
+ENTRYPOINT ["/usr/bin/ollama"]
+CMD ["serve"]
