@@ -1,19 +1,16 @@
 services:
 
-  # Einzel-Instanz: alle GPUs kombiniert — RTX + Tesla M10
+  # Einzel-Instanz: alle 12 GPU-Endpoints kombiniert (114 GB VRAM)
   #
-  # RTX/GTX (66 GB):  3× RTX 2060 (sm_7.5)  +  2× RTX 3060 (sm_8.6)  +  1× GTX 1060 (sm_6.1)
-  # Tesla   (32 GB):  4× Tesla M10 (sm_5.2)
-  # Gesamt: 98 GB VRAM — ermöglicht Modelle bis ~70 GB (Weights + KV-Cache)
+  # GPU 0-3, 6:  5× RTX (2×RTX2060 + 3×RTX3060)  à 12 GB = 60 GB  sm_7.5/sm_8.6
+  # GPU 4-5:     Tesla M60 (1 Karte, 2 GPU-Dies)   à  7.68 GB = 15.36 GB  sm_5.2
+  # GPU 7-10:    Tesla M10 (1 Karte, 4 GPU-Dies)   à  8 GB = 32 GB  sm_5.2
+  # GPU 11:      GTX 1060                              6 GB  sm_6.1
+  # Gesamt:      ~114 GB VRAM — für Modelle bis ~80 GB (Weights + KV-Cache)
   #
   # Image: ghcr.io/h3rb3rn/ollama-legacy (CUDA 12.0.1, CC 50-virtual→90a)
-  #   Offizielles ollama:latest nutzt CUDA 12.5+ → Tesla M10 Treiber inkompatibel.
-  #   Das Legacy-Image unterstützt CC 5.2 (Tesla PTX-JIT) bis CC 9.0a (H100).
-  #   Für RTX 2060/3060 kein Unterschied zu latest — alle Features verfügbar.
-  #
-  # Flash Attention: DEAKTIVIERT — Tesla M10 (sm_5.2) unterstützt FA nicht.
-  #   Mit FA=0 verwendet llama.cpp Standard-Attention für alle GPUs.
-  #   KV-Cache-Quantisierung (q4_0/q8_0) erfordert FA → f16 ist sicher für Maxwell.
+  #   PTX-JIT für Tesla M10/M60 (CC 5.2) — einmalige JIT-Kompilierung beim ersten Load,
+  #   danach gecacht in /opt/ollama/cuda-cache.
   #
   # Source: https://github.com/h3rb3rn/ollama-legacy-gpu
   ollama:
@@ -22,7 +19,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - /opt/ollama/models:/root/.ollama
+      - /opt/ollama:/root/.ollama
     env_file:
       - .env
     deploy:
@@ -30,19 +27,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids:
-                # RTX/GTX GPUs
-                - GPU-ed954d67-584b-f101-ae1e-5cd4df31cebc   # RTX 2060
-                - GPU-6e62055a-46d4-e5e1-41d6-90efc6aa3dbb   # RTX 3060
-                - GPU-63bfbd4b-9dd7-75ee-e025-d7c8966fcc42   # RTX 3060
-                - GPU-6cf8a010-9ab8-f640-b5d4-b88540b220b7   # RTX 2060
-                - GPU-fb5f0ecf-b19c-6899-c507-215130ede1a6   # RTX 2060
-                - GPU-04dd9215-d446-8bf1-1010-0f61530f1770   # GTX 1060 6GB
-                # Tesla M10 GPUs
-                - GPU-f668b685-3c6d-0fc7-1f85-960a0607c561   # Tesla M10
-                - GPU-086bd19b-5a4c-a6dc-8c82-9c1a5276b0b2   # Tesla M10
-                - GPU-7b3bd39b-b948-09a6-8ef9-756406efdb99   # Tesla M10
-                - GPU-113fd30d-cb6f-ad02-0803-2c2b9053709d   # Tesla M10
+              count: all
               capabilities: [gpu]
     restart: unless-stopped
     networks:
