@@ -103,7 +103,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl libvulkan1 libopenblas0 \
+    ca-certificates curl libvulkan1 libopenblas0 python3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /bin/ollama  /usr/bin/ollama

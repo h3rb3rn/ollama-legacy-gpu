@@ -1,151 +1,185 @@
 #!/usr/bin/env bash
 # gpu-detect.sh — Auto-detects GPU bandwidth and generates optimized Ollama configuration.
 #
-# Outputs /tmp/ollama-gpu-config.env with:
-#   CUDA_VISIBLE_DEVICES  — GPUs ordered worst-bandwidth-first, best-bandwidth-last.
-#                           The back-to-front fitting algorithm (patched by
-#                           patch-llama-tier-fitting.py) then fills fastest GPUs first.
-#   OLLAMA_GPU_TIER_THRESHOLD — CUDA index boundary: devices 0..N-1 are "legacy"
-#                               (filled only when fast pool is insufficient).
-#   OLLAMA_FLASH_ATTENTION    — 0 when legacy GPUs (CC < 7.5) are present in pool.
-#                               FA requires all active GPUs to have tensor cores (CC >= 7.5).
-#   OLLAMA_KV_CACHE_TYPE      — f16 when legacy GPUs present (q4_0/q8_0 require FA).
+# Uses NVIDIA NVML (libnvidia-ml.so.1) via Python ctypes — does NOT require nvidia-smi.
+# NVML is injected by the NVIDIA container runtime (docker --gpus / count: all).
 #
-# Usage:
-#   source /usr/local/bin/gpu-detect.sh  # sets env vars in current shell
-#   eval "$(gpu-detect.sh)"              # alternative
+# Outputs $OUTPUT_FILE (default: /tmp/ollama-gpu-config.env) with:
+#   CUDA_VISIBLE_DEVICES        — GPUs ordered worst-bandwidth-first, best-last.
+#   OLLAMA_GPU_TIER_THRESHOLD   — CUDA index count of "legacy" GPUs (CC < 70).
+#   OLLAMA_FLASH_ATTENTION      — 0 when legacy GPUs present (they lack tensor cores).
+#   OLLAMA_KV_CACHE_TYPE        — f16 when legacy GPUs present (q4_0/q8_0 require FA).
 #
-# Performance note:
-#   To achieve maximum tok/s on models that fit in the fast pool, the pool-aware FA
-#   feature (OLLAMA_TIER_FLASH_ATTENTION) is required. This needs an Ollama Go patch
-#   that enables FA when the model is placed on fast-GPUs-only (TIER_THRESHOLD > 0
-#   and no legacy GPU received any layers). See docs/roadmap-tier-fa.md.
-#
-# Portability:
-#   Works on any NVIDIA GPU combination. Re-run after hardware changes.
-#   Requires: nvidia-smi, python3 (for JSON parsing).
-
-set -euo pipefail
+# Portability: works on any NVIDIA GPU combination. Re-run after hardware changes.
+# Disable: set OLLAMA_GPU_AUTODETECT=0.
 
 OUTPUT_FILE="${1:-/tmp/ollama-gpu-config.env}"
 
-# ── Step 1: Query all GPUs ────────────────────────────────────────────────────
+python3 - "$OUTPUT_FILE" << 'PYEOF'
+import sys
+import ctypes
 
-GPU_DATA=$(nvidia-smi --query-gpu=index,uuid,name,compute_cap,memory.bus_width,clocks.max.memory \
-    --format=csv,noheader,nounits 2>/dev/null) || {
-    echo "# gpu-detect.sh: nvidia-smi failed — no GPU config generated" > "$OUTPUT_FILE"
-    echo "CUDA_VISIBLE_DEVICES=" >> "$OUTPUT_FILE"
-    exit 0
-}
+output_file = sys.argv[1]
 
-# ── Step 2: Parse, compute bandwidth, sort ────────────────────────────────────
+# ── Load NVML ────────────────────────────────────────────────────────────────
 
-python3 - <<'PYEOF' "$OUTPUT_FILE" <<EOF_DATA
-$GPU_DATA
-EOF_DATA
-PYEOF
+NVML_PATHS = [
+    "libnvidia-ml.so.1",
+    "/usr/local/nvidia/lib64/libnvidia-ml.so.1",
+    "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1",
+    "/usr/lib/libnvidia-ml.so.1",
+]
 
-python3 << PYEOF
-import sys, os
+nvml = None
+for path in NVML_PATHS:
+    try:
+        nvml = ctypes.CDLL(path)
+        break
+    except OSError:
+        continue
 
-gpu_data_str = """$GPU_DATA"""
-output_file = "$OUTPUT_FILE"
+if nvml is None:
+    with open(output_file, 'w') as f:
+        f.write("# gpu-detect.sh: NVML (libnvidia-ml.so.1) not found\n")
+        f.write("# Ensure container is started with --gpus or count: all\n")
+    print("gpu-detect: NVML not found — no GPU config generated", file=sys.stderr)
+    sys.exit(0)
+
+try:
+    ret = nvml.nvmlInit_v2()
+    if ret != 0:
+        nvml.nvmlInit()
+except Exception:
+    nvml.nvmlInit()
+
+# ── Query GPUs ───────────────────────────────────────────────────────────────
+
+count = ctypes.c_uint()
+nvml.nvmlDeviceGetCount_v2(ctypes.byref(count))
+
+NVML_CLOCK_MEM = 2  # nvmlClockType_t: NVML_CLOCK_MEM
+
+class nvmlPciInfo_t(ctypes.Structure):
+    _fields_ = [
+        ('busIdLegacy', ctypes.c_char * 16),
+        ('domain', ctypes.c_uint),
+        ('bus', ctypes.c_uint),
+        ('device', ctypes.c_uint),
+        ('pciDeviceId', ctypes.c_uint),
+        ('pciSubSystemId', ctypes.c_uint),
+        ('busId', ctypes.c_char * 32),
+    ]
 
 gpus = []
-for line in gpu_data_str.strip().splitlines():
-    parts = [p.strip() for p in line.split(',')]
-    if len(parts) < 6:
-        continue
-    idx, uuid, name, cc_str, bus_width_str, mem_clock_str = parts[:6]
-    try:
-        idx       = int(idx)
-        uuid      = uuid.strip()
-        cc_str    = cc_str.strip()          # e.g. "5.2"
-        bus_width = int(bus_width_str)      # bits
-        mem_clock = int(mem_clock_str)      # MHz
-    except ValueError:
-        continue
+for i in range(count.value):
+    handle = ctypes.c_void_p()
+    nvml.nvmlDeviceGetHandleByIndex_v2(i, ctypes.byref(handle))
 
-    # Compute capability as integer (52 for 5.2, 75 for 7.5, etc.)
-    try:
-        major, minor = cc_str.split('.')
-        cc = int(major) * 10 + int(minor)
-    except:
-        cc = 0
+    # UUID
+    uuid_buf = ctypes.create_string_buffer(96)
+    nvml.nvmlDeviceGetUUID(handle, uuid_buf, 96)
+    uuid = uuid_buf.value.decode().strip()
 
-    # Memory bandwidth in GB/s: 2 × bus_width_bits/8 × freq_MHz / 1000
-    bw_gbs = round(2 * (bus_width / 8) * mem_clock / 1000)
+    # Name
+    name_buf = ctypes.create_string_buffer(96)
+    nvml.nvmlDeviceGetName(handle, name_buf, 96)
+    name = name_buf.value.decode().strip()
+
+    # Compute capability
+    major = ctypes.c_int()
+    minor = ctypes.c_int()
+    nvml.nvmlDeviceGetCudaComputeCapability(handle, ctypes.byref(major), ctypes.byref(minor))
+    cc = major.value * 10 + minor.value
+
+    # Memory bus width (bits)
+    bus_width = ctypes.c_uint()
+    try:
+        nvml.nvmlDeviceGetMemoryBusWidth(handle, ctypes.byref(bus_width))
+        bw_bits = bus_width.value
+    except Exception:
+        bw_bits = 128  # fallback
+
+    # Max memory clock (MHz)
+    mem_clock = ctypes.c_uint()
+    try:
+        nvml.nvmlDeviceGetMaxClockInfo(handle, NVML_CLOCK_MEM, ctypes.byref(mem_clock))
+        mhz = mem_clock.value
+    except Exception:
+        mhz = 1000  # fallback
+
+    # Bandwidth in GB/s: 2 × (bits/8) × MHz / 1000
+    bw_gbs = int(2 * (bw_bits / 8) * mhz / 1000)
 
     gpus.append({
-        'idx': idx,
+        'idx': i,
         'uuid': uuid,
-        'name': name.strip(),
+        'name': name,
         'cc': cc,
         'bw_gbs': bw_gbs,
     })
 
+nvml.nvmlShutdown()
+
 if not gpus:
     with open(output_file, 'w') as f:
-        f.write("# gpu-detect.sh: no GPUs found\n")
+        f.write("# gpu-detect.sh: no GPUs found via NVML\n")
     sys.exit(0)
 
-# Sort by bandwidth ascending (worst first → lowest CUDA index → filled last by algorithm)
+# ── Sort worst-bandwidth-first ────────────────────────────────────────────────
+# Worst → lowest CUDA index → filled LAST by back-to-front algorithm.
+# Best  → highest CUDA index → filled FIRST.
+
 gpus.sort(key=lambda g: (g['bw_gbs'], g['cc']))
 
-# Generate CUDA_VISIBLE_DEVICES (worst → best bandwidth = lowest → highest CUDA index)
 cuda_visible = ','.join(g['uuid'] for g in gpus)
 
-# Tier threshold: how many "legacy" GPUs (CC < 70 = below Turing/Volta)
-# Legacy = Maxwell (52,50), Kepler (37,35), Pascal (61,60)
-# Fast = Turing (75), Ampere (86,80), Ada (89), Hopper (90)
-LEGACY_CC_MAX = 69  # < 70 = legacy (Kepler, Maxwell, Pascal)
+# Legacy = CC < 70 (Kepler 37, Maxwell 50/52, Pascal 60/61)
+# Fast   = CC >= 70 (Volta 70, Turing 75, Ampere 80/86, Ada 89, Hopper 90)
+LEGACY_CC_MAX = 69
 legacy_count = sum(1 for g in gpus if g['cc'] <= LEGACY_CC_MAX)
-fast_count = len(gpus) - legacy_count
 
-# Flash attention: requires all active GPUs to have CC >= 75 (tensor cores)
-# With tier patch, fast GPUs (CC >= 75) get layers first.
-# FA CAN be enabled when all fast GPUs have CC >= 75 — but Ollama still
-# sees legacy GPUs in the pool and may disable FA globally.
-# Conservative: disable FA when any legacy GPU is present.
-# TODO: enable FA when TIER_THRESHOLD > 0 and all fast GPUs have CC >= 75
-#       (requires Ollama Go patch for pool-aware FA — see roadmap).
+# Flash Attention: disable when any legacy GPU visible (they lack tensor cores).
+# With tier patch, fast GPUs get all layers for small models, but Ollama's
+# FA check sees ALL visible GPUs — pool-aware FA needs a Go patch (see roadmap).
 has_legacy = legacy_count > 0
 fa_enabled = 0 if has_legacy else 1
 kv_cache_type = "f16" if has_legacy else "q4_0"
 
-# GPU overhead: 256 MB per GPU (avoids OOM in binary search)
+# GPU overhead: 256 MB per GPU
 gpu_overhead = 268435456
 
+# ── Write output ─────────────────────────────────────────────────────────────
+
 lines = [
-    "# Auto-generated by gpu-detect.sh — do not edit manually",
-    f"# Detected {len(gpus)} GPUs: {fast_count} fast (CC >= 70), {legacy_count} legacy (CC < 70)",
+    "# Auto-generated by gpu-detect.sh via NVML — do not edit manually",
+    f"# {len(gpus)} GPUs detected: {len(gpus)-legacy_count} fast (CC>={LEGACY_CC_MAX+1}), {legacy_count} legacy (CC<={LEGACY_CC_MAX})",
     "#",
     "# CUDA device ordering (worst bandwidth → lowest CUDA index, best → highest):",
 ]
 for i, g in enumerate(gpus):
-    lines.append(f"# CUDA{i:2d}: {g['name']:25s} CC={g['cc']:2d}  ~{g['bw_gbs']:4d} GB/s  [{g['uuid'][:8]}...]")
+    tier = "LEGACY" if g['cc'] <= LEGACY_CC_MAX else "FAST  "
+    lines.append(f"#   CUDA{i:2d}: [{tier}] {g['name']:28s}  CC={g['cc']:2d}  ~{g['bw_gbs']:4d} GB/s")
 
 lines += [
     "#",
-    f"# Legacy GPUs (CUDA 0..{legacy_count-1}): filled only when fast pool is insufficient",
-    f"# Fast   GPUs (CUDA {legacy_count}..{len(gpus)-1}): filled first by tier patch",
+    f"# Tier threshold: CUDA 0..{max(legacy_count-1,0)} = legacy (overflow only)",
+    f"#                 CUDA {legacy_count}..{len(gpus)-1} = fast (filled first)",
     "",
     f"CUDA_VISIBLE_DEVICES={cuda_visible}",
     f"OLLAMA_GPU_TIER_THRESHOLD={legacy_count}",
     f"OLLAMA_FLASH_ATTENTION={fa_enabled}",
     f"OLLAMA_KV_CACHE_TYPE={kv_cache_type}",
     f"OLLAMA_GPU_OVERHEAD={gpu_overhead}",
-    "",
-    "# Flash Attention note:",
-    "# FA is disabled because legacy GPUs (CC < 75) are present in the CUDA device list.",
-    "# Even with OLLAMA_GPU_TIER_THRESHOLD, Ollama disables FA globally when any visible",
-    "# GPU lacks tensor core support. To enable FA for fast-GPU-only models, apply the",
-    "# pool-aware FA patch to Ollama (llm/llama_server.go). See docs/roadmap-tier-fa.md.",
 ]
 
 with open(output_file, 'w') as f:
     f.write('\n'.join(lines) + '\n')
 
-print(f"gpu-detect.sh: {len(gpus)} GPUs → threshold={legacy_count}, FA={fa_enabled}, KV={kv_cache_type}")
-print(f"  Written: {output_file}")
+fast_names = [g['name'] for g in gpus if g['cc'] > LEGACY_CC_MAX]
+legacy_names = [g['name'] for g in gpus if g['cc'] <= LEGACY_CC_MAX]
+print(f"gpu-detect: {len(gpus)} GPUs | threshold={legacy_count} | FA={fa_enabled} | KV={kv_cache_type}")
+if fast_names:
+    print(f"  Fast:   {', '.join(dict.fromkeys(fast_names))}")
+if legacy_names:
+    print(f"  Legacy: {', '.join(dict.fromkeys(legacy_names))}")
 PYEOF
