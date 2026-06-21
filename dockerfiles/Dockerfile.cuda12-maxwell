@@ -109,6 +109,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /bin/ollama  /usr/bin/ollama
 COPY --from=builder /runtime     /usr/lib/ollama
 
+# GPU auto-detection and tier-fitting entrypoint
+COPY scripts/gpu-detect.sh         /usr/local/bin/gpu-detect.sh
+COPY scripts/ollama-entrypoint.sh  /usr/local/bin/ollama-entrypoint.sh
+RUN chmod +x /usr/local/bin/gpu-detect.sh /usr/local/bin/ollama-entrypoint.sh
+
 # /usr/lib/ollama must be first so libggml-base.so.0 is found when libggml-cuda.so
 # (RPATH=$ORIGIN pointing to cuda_v12/) falls back to LD_LIBRARY_PATH.
 ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
@@ -122,5 +127,5 @@ VOLUME ["/root/.ollama"]
 HEALTHCHECK --interval=30s --timeout=15s --retries=5 --start-period=90s \
     CMD curl -sf http://localhost:11434/api/tags || exit 1
 
-ENTRYPOINT ["/usr/bin/ollama"]
+ENTRYPOINT ["/usr/local/bin/ollama-entrypoint.sh"]
 CMD ["serve"]
