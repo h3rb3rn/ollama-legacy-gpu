@@ -18,6 +18,7 @@
 #   JOBS                Parallele Build-Jobs
 
 ARG CUDA12_VERSION=12.0.1
+ARG CMAKE_VERSION=3.31.7
 
 # ── Stage 1: Build-Toolchain ──────────────────────────────────────────────────
 FROM nvidia/cuda:${CUDA12_VERSION}-devel-ubuntu22.04 AS builder
@@ -25,13 +26,18 @@ FROM nvidia/cuda:${CUDA12_VERSION}-devel-ubuntu22.04 AS builder
 ARG OLLAMA_VERSION=main
 ARG CUDA_ARCHITECTURES="50-virtual;52-virtual;60-virtual;61-virtual;70;75;80;86;89;90;90a"
 ARG JOBS=8
+ARG CMAKE_VERSION=3.31.7
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_GENERATOR=Ninja
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl ca-certificates ninja-build cmake ccache \
+    build-essential git curl ca-certificates ninja-build ccache \
     && rm -rf /var/lib/apt/lists/*
+
+# CMake ≥ 3.24 erforderlich — Ubuntu 22.04 apt liefert nur 3.22
+RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
+    | tar -C /usr/local --strip-components=1 -xz
 
 WORKDIR /src
 RUN git clone --depth=1 \
@@ -46,7 +52,9 @@ RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
 # CUDA v12 Runner bauen (preset enthält bereits 50-virtual;52-virtual für Maxwell)
-RUN --mount=type=cache,target=/root/.ccache \
+# WICHTIG: Kein --component Filter → installiert llama-server Binary + CUDA-Libs.
+# --component llama-server installiert nur die .so-Dateien, nicht das Binary selbst.
+RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
     cmake -S llama/server \
           --preset llama_cuda_v12_linux \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
@@ -54,8 +62,19 @@ RUN --mount=type=cache,target=/root/.ccache \
     && cmake --build build/llama-server-cuda_v12 \
              --parallel "${JOBS}" \
     && cmake --install build/llama-server-cuda_v12 \
-             --component llama-server \
              --strip
+
+# Runtime-Dateien zusammenführen:
+#   cmake installiert llama-server nach dist/bin/ (nicht dist/lib/ollama/).
+#   Ollama-Go-Binary sucht llama-server unter /usr/lib/ollama/llama-server.
+#   Alle Shared Libs werden benötigt weil RPATH=$ORIGIN → /usr/lib/ollama/.
+RUN mkdir -p /runtime \
+    && cp -aT /src/dist/lib/ollama /runtime \
+    && find /src/dist/lib -maxdepth 1 -name 'lib*.so*' -exec cp -P {} /runtime/ \; \
+    && find /src/build/llama-server-cuda_v12/bin -maxdepth 1 \( -type f -o -type l \) \
+       -exec cp -P {} /runtime/ \; \
+    && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libnccl.so*' -exec cp -P {} /runtime/cuda_v12/ \; 2>/dev/null || true \
+    && ls -lh /runtime/ /runtime/cuda_v12/
 
 # Go-Binary
 RUN --mount=type=cache,target=/root/.cache/go-build \
@@ -68,10 +87,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl libvulkan1 libopenblas0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /bin/ollama          /usr/bin/ollama
-COPY --from=builder /src/dist/lib/ollama /usr/lib/ollama
+COPY --from=builder /bin/ollama  /usr/bin/ollama
+COPY --from=builder /runtime     /usr/lib/ollama
 
-ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV OLLAMA_HOST=0.0.0.0:11434

@@ -4,7 +4,7 @@ services:
   #
   # GPU 0-3, 6:  5× RTX (2×RTX2060 + 3×RTX3060)  à 12 GB = 60 GB  sm_7.5/sm_8.6
   # GPU 4-5:     Tesla M60 (1 Karte, 2 GPU-Dies)   à  7.68 GB = 15.36 GB  sm_5.2
-  # GPU 7-10:    Tesla M10 (1 Karte, 4 GPU-Dies)   à  8 GB = 32 GB  sm_5.2
+  # GPU 7-10:    Tesla M10 (1 Karte, 4 GPU-Dies)   à  8 GB = 32 GB  sm_5.0
   # GPU 11:      GTX 1060                              6 GB  sm_6.1
   # Gesamt:      ~114 GB VRAM — für Modelle bis ~80 GB (Weights + KV-Cache)
   #
@@ -19,7 +19,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - /opt/ollama:/root/.ollama
+      - /opt/ollama/models:/root/.ollama
     env_file:
       - .env
     deploy:
