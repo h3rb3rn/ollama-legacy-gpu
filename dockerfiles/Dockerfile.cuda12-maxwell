@@ -46,6 +46,7 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
     | tar -C /usr/local --strip-components=1 -xz
 
 COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
+COPY scripts/patch-ollama-fa.py         /tmp/patch-ollama-fa.py
 
 WORKDIR /src
 RUN git clone --depth=1 \
@@ -94,6 +95,12 @@ RUN mkdir -p /runtime \
        -exec cp -P {} /runtime/ \; \
     && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libnccl.so*' -exec cp -P {} /runtime/cuda_v12/ \; 2>/dev/null || true \
     && ls -lh /runtime/ /runtime/cuda_v12/
+
+# Tier-aware Flash Attention patch (Option 3 hybrid — Go layer)
+# Modifies LlamaServerFlashAttention() to check FA support only on fast GPUs
+# (CUDA index >= OLLAMA_GPU_TIER_THRESHOLD), not on all visible devices.
+# Enables FA when model lands on FA-capable GPUs only (CC >= 7.0, driver >= 7).
+RUN python3 /tmp/patch-ollama-fa.py /src
 
 # Go binary
 RUN --mount=type=cache,target=/root/.cache/go-build \
