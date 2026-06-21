@@ -91,8 +91,8 @@ GitHub Actions checks every Monday for a new Ollama release and triggers a build
 | Node | GPUs | Image | Ollama node name |
 |---|---|---|---|
 | N04-RTX | RTX + Tesla M10/M60 | `cuda12-maxwell-latest` | N04-RTX |
-| N11-M10 | 20× Tesla M10 | `cuda12-maxwell-latest` | N11-M10 |
-| N12-M60 | 1× Tesla M60 | `cuda12-maxwell-latest` | N12-M60 |
+| N11-M10 | 1× Tesla M10 card (4 GPU dies, 32 GB) | `cuda12-maxwell-latest` | N11-M10 |
+| N12-M60 | 1× Tesla M60 card (2 GPU dies, 15 GB) | `cuda12-maxwell-latest` | N12-M60 |
 | N13-K80 | 7× Tesla K80 | `cuda11-legacy-latest` | N13-K80 |
 
 ## License
