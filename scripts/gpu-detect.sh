@@ -160,23 +160,42 @@ for i, g in enumerate(gpus):
     tier = "LEGACY" if g['cc'] <= LEGACY_CC_MAX else "FAST  "
     lines.append(f"#   CUDA{i:2d}: [{tier}] {g['name']:28s}  CC={g['cc']:2d}  ~{g['bw_gbs']:4d} GB/s")
 
+# Fast GPU pool: CC >= 75 (Turing+ = FA-capable)
+FA_CC_MIN = 75
+fast_pool_gpus = [g for g in gpus if g['cc'] >= FA_CC_MIN]
+fast_pool_uuids = ','.join(g['uuid'] for g in fast_pool_gpus)
+
+# Fast pool total VRAM via NVML
+fast_pool_vram_bytes = 0
+for g in fast_pool_gpus:
+    _idx = gpus.index(g)
+    _handle = ctypes.c_void_p()
+    nvml.nvmlDeviceGetHandleByIndex_v2(_idx, ctypes.byref(_handle))
+    class _Mem(ctypes.Structure):
+        _fields_ = [('total', ctypes.c_ulonglong), ('free', ctypes.c_ulonglong), ('used', ctypes.c_ulonglong)]
+    _mem = _Mem()
+    try:
+        nvml.nvmlDeviceGetMemoryInfo(_handle, ctypes.byref(_mem))
+        fast_pool_vram_bytes += _mem.total
+    except Exception:
+        fast_pool_vram_bytes += 11 * 1024**3
+fast_pool_vram_gb = int(fast_pool_vram_bytes / 1e9)
+
 lines += [
     "#",
     f"# Tier threshold: CUDA 0..{max(legacy_count-1,0)} = legacy (overflow only)",
-    f"#                 CUDA {legacy_count}..{len(gpus)-1} = fast (filled first)",
+    f"#                 CUDA {legacy_count}..{len(gpus)-1} = fast (tier-fitting)",
     "#",
-    "# Flash Attention: NOT set here — handled by the patched LlamaServerFlashAttention()",
-    "# in llm/llama_server.go (patch-ollama-fa.py). The patch enables FA automatically",
-    "# when all GPUs that actually receive model layers support FA (CC >= 7.0).",
-    "# Setting OLLAMA_FLASH_ATTENTION here would override the patch (Ollama treats it",
-    "# as a user override and skips the tier-aware FA check).",
+    "# Dynamic GPU pool (patch-ollama-dynamic-pool.py):",
+    f"# Fast pool: {len(fast_pool_gpus)} GPUs (CC>={FA_CC_MIN}, FA-capable) = {fast_pool_vram_gb} GB",
+    "# Models <= 75% of fast pool VRAM → FAST_GPU_DEVICES only (FA=ON, 50-60 tok/s).",
+    "# Models > threshold → all GPUs (FA=OFF, full 113 GB pool for large models).",
     "",
     f"CUDA_VISIBLE_DEVICES={cuda_visible}",
     f"OLLAMA_GPU_TIER_THRESHOLD={legacy_count}",
     f"OLLAMA_GPU_OVERHEAD={gpu_overhead}",
-    "# KV cache type: f16 is safe with any FA setting. When FA is enabled by the patch,",
-    "# changing to q4_0 reduces KV VRAM by 4x. Set OLLAMA_KV_CACHE_TYPE=q4_0 in",
-    "# .env.multigpu once the FA patch is verified working on your hardware.",
+    f"OLLAMA_FAST_GPU_DEVICES={fast_pool_uuids}",
+    f"OLLAMA_FAST_POOL_VRAM_GB={fast_pool_vram_gb}",
 ]
 
 with open(output_file, 'w') as f:
