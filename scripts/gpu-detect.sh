@@ -164,12 +164,19 @@ lines += [
     "#",
     f"# Tier threshold: CUDA 0..{max(legacy_count-1,0)} = legacy (overflow only)",
     f"#                 CUDA {legacy_count}..{len(gpus)-1} = fast (filled first)",
+    "#",
+    "# Flash Attention: NOT set here — handled by the patched LlamaServerFlashAttention()",
+    "# in llm/llama_server.go (patch-ollama-fa.py). The patch enables FA automatically",
+    "# when all GPUs that actually receive model layers support FA (CC >= 7.0).",
+    "# Setting OLLAMA_FLASH_ATTENTION here would override the patch (Ollama treats it",
+    "# as a user override and skips the tier-aware FA check).",
     "",
     f"CUDA_VISIBLE_DEVICES={cuda_visible}",
     f"OLLAMA_GPU_TIER_THRESHOLD={legacy_count}",
-    f"OLLAMA_FLASH_ATTENTION={fa_enabled}",
-    f"OLLAMA_KV_CACHE_TYPE={kv_cache_type}",
     f"OLLAMA_GPU_OVERHEAD={gpu_overhead}",
+    "# KV cache type: f16 is safe with any FA setting. When FA is enabled by the patch,",
+    "# changing to q4_0 reduces KV VRAM by 4x. Set OLLAMA_KV_CACHE_TYPE=q4_0 in",
+    "# .env.multigpu once the FA patch is verified working on your hardware.",
 ]
 
 with open(output_file, 'w') as f:
