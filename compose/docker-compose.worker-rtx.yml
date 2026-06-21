@@ -1,16 +1,16 @@
 services:
 
-  # Einzel-Instanz: alle 12 GPU-Endpoints kombiniert (114 GB VRAM)
+  # Single instance: all 12 GPU endpoints combined (~114 GB VRAM)
   #
-  # GPU 0-3, 6:  5× RTX (2×RTX2060 + 3×RTX3060)  à 12 GB = 60 GB  sm_7.5/sm_8.6
-  # GPU 4-5:     Tesla M60 (1 Karte, 2 GPU-Dies)   à  7.68 GB = 15.36 GB  sm_5.2
-  # GPU 7-10:    Tesla M10 (1 Karte, 4 GPU-Dies)   à  8 GB = 32 GB  sm_5.0
+  # GPU 0-3, 6:  5× RTX (2×RTX2060 + 3×RTX3060)  @ 12 GB = 60 GB  sm_7.5/sm_8.6
+  # GPU 4-5:     Tesla M60 (1 card, 2 GPU dies)    @  7.68 GB = 15.36 GB  sm_5.2
+  # GPU 7-10:    Tesla M10 (1 card, 4 GPU dies)    @  8 GB = 32 GB  sm_5.0
   # GPU 11:      GTX 1060                              6 GB  sm_6.1
-  # Gesamt:      ~114 GB VRAM — für Modelle bis ~80 GB (Weights + KV-Cache)
+  # Total:       ~114 GB VRAM — fits models up to ~80 GB (weights + KV-cache)
   #
   # Image: ghcr.io/h3rb3rn/ollama-legacy (CUDA 12.0.1, CC 50-virtual→90a)
-  #   PTX-JIT für Tesla M10/M60 (CC 5.2) — einmalige JIT-Kompilierung beim ersten Load,
-  #   danach gecacht in /opt/ollama/cuda-cache.
+  #   PTX-JIT for Tesla M10/M60 (CC 5.0/5.2) — one-time JIT compilation on first load,
+  #   then cached in /opt/ollama/models/cuda-cache.
   #
   # Source: https://github.com/h3rb3rn/ollama-legacy-gpu
   ollama:

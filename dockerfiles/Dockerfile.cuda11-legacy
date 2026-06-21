@@ -1,14 +1,14 @@
 # dockerfiles/Dockerfile.cuda11-legacy
 #
-# Ollama für Tesla K80 (CC 3.7, Kepler) + Tesla M10/M60 (CC 5.2, Maxwell)
-# CUDA 11.8 — letzte CUDA-Version mit offizieller CC 3.7 Unterstützung
+# Ollama for Tesla K80 (CC 3.7, Kepler) + Tesla M10/M60 (CC 5.2, Maxwell)
+# CUDA 11.8 — last CUDA version with official CC 3.7 support
 #
-# Da Ollama ab v0.30.x keinen CUDA-11-Preset mehr hat, injiziert dieses Dockerfile
-# unsere eigenen Presets aus presets/cuda11-presets.json in den Ollama-Source-Tree.
-# Die Injektion ist nicht-destruktiv: bestehende Presets bleiben erhalten.
+# Since Ollama dropped CUDA 11 presets after v0.30.x, this Dockerfile injects
+# our own presets from presets/cuda11-presets.json into the Ollama source tree.
+# The injection is non-destructive: existing presets are left untouched.
 #
-# PTX-JIT Hinweis: 37-virtual;50-virtual;52-virtual → Kernel werden beim ersten
-# Modell-Load auf der GPU JIT-kompiliert (~5s), danach gecacht.
+# PTX-JIT note: 37-virtual;50-virtual;52-virtual → kernels are JIT-compiled on
+# first model load (~5 s) and then cached in ~/.ollama/cuda-cache.
 #
 # Build:
 #   docker build -f dockerfiles/Dockerfile.cuda11-legacy \
@@ -18,7 +18,7 @@
 
 ARG CUDA11_VERSION=11.8.0
 
-# ── Stage 1: Build-Toolchain ──────────────────────────────────────────────────
+# ── Stage 1: Build toolchain ──────────────────────────────────────────────────
 FROM nvidia/cuda:${CUDA11_VERSION}-devel-ubuntu20.04 AS builder
 
 ARG OLLAMA_VERSION=main
@@ -28,7 +28,7 @@ ARG JOBS=8
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_GENERATOR=Ninja
 
-# CMake 3.31+ und Ninja aus Source — Ubuntu 20.04 apt hat zu alte Versionen
+# CMake 3.31+ and Ninja from source — Ubuntu 20.04 apt ships versions that are too old
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git curl ca-certificates python3 ninja-build \
     && rm -rf /var/lib/apt/lists/* \
@@ -41,20 +41,20 @@ RUN git clone --depth=1 \
     https://github.com/ollama/ollama.git . \
     && echo "Ollama $(git rev-parse --short HEAD) / $(cat LLAMA_CPP_VERSION)"
 
-# Go — Version aus go.mod lesen
+# Go — read version from go.mod
 RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
     && curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" \
        | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
-# CUDA 11 Preset injizieren (fügt llama_cuda_v11_linux zu llama/server/CMakePresets.json hinzu)
+# Inject CUDA 11 preset (adds llama_cuda_v11_linux to llama/server/CMakePresets.json)
 COPY presets/cuda11-presets.json /tmp/cuda11-presets.json
 COPY scripts/inject-presets.py   /tmp/inject-presets.py
 RUN python3 /tmp/inject-presets.py \
     --source  /src \
     --presets /tmp/cuda11-presets.json
 
-# CUDA v11 Runner bauen mit unserem injizierten Preset
+# Build CUDA v11 runner using our injected preset
 RUN --mount=type=cache,target=/root/.ccache \
     cmake -S llama/server \
           --preset llama_cuda_v11_linux \
@@ -65,7 +65,7 @@ RUN --mount=type=cache,target=/root/.ccache \
              --component llama-server \
              --strip
 
-# Go-Binary
+# Go binary
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -buildmode=pie -ldflags="-w -s" -o /bin/ollama .
 

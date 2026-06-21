@@ -1,11 +1,11 @@
 # dockerfiles/Dockerfile.cuda12-maxwell
 #
-# Ollama für Tesla M10 / M60 (Compute Capability 5.2, Maxwell)
-# CUDA 12.0.1 — niedrigstes CUDA 12, breiteste M10/M60-Treiberkompatibilität
+# Ollama for Tesla M10 / M60 (Compute Capability 5.0/5.2, Maxwell)
+# CUDA 12.0.1 — lowest CUDA 12 release, broadest M10/M60 driver compatibility
 #
-# Das offizielle llama_cuda_v12_linux-Preset enthält bereits 50-virtual;52-virtual.
-# Wir verwenden CUDA 12.0.1 statt 12.5/12.8 damit ältere Treiber funktionieren.
-# GGML_CUDA_FA=OFF: Flash Attention erfordert CC >= 8.0.
+# The official llama_cuda_v12_linux preset already includes 50-virtual;52-virtual.
+# Using CUDA 12.0.1 instead of 12.5/12.8 so older drivers remain compatible.
+# GGML_CUDA_FA=OFF: Flash Attention requires CC >= 8.0.
 #
 # Build:
 #   docker build -f dockerfiles/Dockerfile.cuda12-maxwell \
@@ -13,14 +13,14 @@
 #     --build-arg JOBS=8 \
 #     -t ghcr.io/<owner>/ollama-legacy:cuda12-maxwell-v0.9.0 .
 #
-# Optionale Argumente:
-#   CUDA_ARCHITECTURES  NVCC target list (default: Maxwell + alle neueren bis Blackwell)
-#   JOBS                Parallele Build-Jobs
+# Optional build args:
+#   CUDA_ARCHITECTURES  NVCC target list (default: Maxwell + all newer up to Blackwell)
+#   JOBS                Parallel build jobs
 
 ARG CUDA12_VERSION=12.0.1
 ARG CMAKE_VERSION=3.31.7
 
-# ── Stage 1: Build-Toolchain ──────────────────────────────────────────────────
+# ── Stage 1: Build toolchain ──────────────────────────────────────────────────
 FROM nvidia/cuda:${CUDA12_VERSION}-devel-ubuntu22.04 AS builder
 
 ARG OLLAMA_VERSION=main
@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git curl ca-certificates ninja-build ccache \
     && rm -rf /var/lib/apt/lists/*
 
-# CMake ≥ 3.24 erforderlich — Ubuntu 22.04 apt liefert nur 3.22
+# CMake >= 3.24 required — Ubuntu 22.04 apt only ships 3.22
 RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
     | tar -C /usr/local --strip-components=1 -xz
 
@@ -45,15 +45,15 @@ RUN git clone --depth=1 \
     https://github.com/ollama/ollama.git . \
     && echo "Ollama $(git rev-parse --short HEAD) / $(cat LLAMA_CPP_VERSION)"
 
-# Go — Version aus go.mod lesen
+# Go — read version from go.mod
 RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
     && curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" \
        | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
-# CUDA v12 Runner bauen (preset enthält bereits 50-virtual;52-virtual für Maxwell)
-# WICHTIG: Kein --component Filter → installiert llama-server Binary + CUDA-Libs.
-# --component llama-server installiert nur die .so-Dateien, nicht das Binary selbst.
+# Build CUDA v12 runner (preset already includes 50-virtual;52-virtual for Maxwell)
+# NOTE: No --component filter → installs llama-server binary + CUDA libs.
+# --component llama-server only installs .so files, not the binary itself.
 RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
     cmake -S llama/server \
           --preset llama_cuda_v12_linux \
@@ -64,10 +64,13 @@ RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
     && cmake --install build/llama-server-cuda_v12 \
              --strip
 
-# Runtime-Dateien zusammenführen:
-#   cmake installiert llama-server nach dist/bin/ (nicht dist/lib/ollama/).
-#   Ollama-Go-Binary sucht llama-server unter /usr/lib/ollama/llama-server.
-#   Alle Shared Libs werden benötigt weil RPATH=$ORIGIN → /usr/lib/ollama/.
+# Collect all runtime files into /runtime:
+#   cmake installs llama-server to dist/bin/ (not dist/lib/ollama/).
+#   The Ollama Go binary searches for llama-server at /usr/lib/ollama/llama-server.
+#   All shared libs are required because RPATH=$ORIGIN → /usr/lib/ollama/.
+#   libllama-server-impl.so and libllama-quantize-impl.so are built but not
+#   installed by cmake — must be copied manually from the build directory.
+#   libnccl is linked by libggml-cuda.so and must come from the builder image.
 RUN mkdir -p /runtime \
     && cp -aT /src/dist/lib/ollama /runtime \
     && find /src/dist/lib -maxdepth 1 -name 'lib*.so*' -exec cp -P {} /runtime/ \; \
@@ -76,7 +79,7 @@ RUN mkdir -p /runtime \
     && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libnccl.so*' -exec cp -P {} /runtime/cuda_v12/ \; 2>/dev/null || true \
     && ls -lh /runtime/ /runtime/cuda_v12/
 
-# Go-Binary
+# Go binary
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -buildmode=pie -ldflags="-w -s" -o /bin/ollama .
 
@@ -90,6 +93,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /bin/ollama  /usr/bin/ollama
 COPY --from=builder /runtime     /usr/lib/ollama
 
+# /usr/lib/ollama must be first so libggml-base.so.0 is found when libggml-cuda.so
+# (RPATH=$ORIGIN pointing to cuda_v12/) falls back to LD_LIBRARY_PATH.
 ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV NVIDIA_VISIBLE_DEVICES=all

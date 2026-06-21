@@ -1,8 +1,8 @@
-name: Upstream Ollama Release-Check
+name: Upstream Ollama Release Check
 
 on:
   schedule:
-    # Jeden Montag um 06:17 UTC (off-peak, kein :00/:30 Stau)
+    # Every Monday at 06:17 UTC (off-peak, avoids :00/:30 congestion)
     - cron: '17 6 * * 1'
   workflow_dispatch:
 
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Aktuelle Ollama-Version abrufen
+      - name: Fetch latest Ollama version
         id: upstream
         run: |
           VERSION=$(curl -sf https://api.github.com/repos/ollama/ollama/releases/latest \
@@ -23,14 +23,14 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Upstream: $VERSION"
 
-      - name: Letzte gebaute Version lesen
+      - name: Read last built version
         id: local
         run: |
           LAST=$(cat .last-built-version 2>/dev/null || echo "none")
           echo "last=$LAST" >> $GITHUB_OUTPUT
-          echo "Zuletzt gebaut: $LAST"
+          echo "Last built: $LAST"
 
-      - name: Neue Version erkannt → Build auslösen
+      - name: New version detected — trigger build
         if: steps.upstream.outputs.version != steps.local.outputs.last
         uses: actions/github-script@v7
         with:
@@ -43,18 +43,18 @@ jobs:
                 version: '${{ steps.upstream.outputs.version }}'
               }
             });
-            console.log('Build-Workflow ausgelöst für ${{ steps.upstream.outputs.version }}');
+            console.log('Build workflow triggered for ${{ steps.upstream.outputs.version }}');
 
-      - name: Versionsdatei aktualisieren
+      - name: Update version file
         if: steps.upstream.outputs.version != steps.local.outputs.last
         run: |
           echo "${{ steps.upstream.outputs.version }}" > .last-built-version
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .last-built-version
-          git commit -m "chore: Ollama ${{ steps.upstream.outputs.version }} erkannt"
+          git commit -m "chore: detected Ollama ${{ steps.upstream.outputs.version }}"
           git push
 
-      - name: Kein Update nötig
+      - name: Already up to date
         if: steps.upstream.outputs.version == steps.local.outputs.last
-        run: echo "Bereits aktuell (${{ steps.upstream.outputs.version }}) — kein Build nötig."
+        run: echo "Already current (${{ steps.upstream.outputs.version }}) — no build needed."

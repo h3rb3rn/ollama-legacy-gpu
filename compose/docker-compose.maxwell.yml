@@ -1,5 +1,5 @@
-# Deployment für Tesla M10 / M60 (CC 5.2, Maxwell) — CUDA 12
-# Nutzung: docker compose -f compose/docker-compose.maxwell.yml up -d
+# Deployment for Tesla M10 / M60 (CC 5.0/5.2, Maxwell) — CUDA 12
+# Usage: docker compose -f compose/docker-compose.maxwell.yml up -d
 
 services:
   ollama:
@@ -13,7 +13,7 @@ services:
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_KEEP_ALIVE=5m
-      # PTX-JIT-Kernel werden gecacht — kein Kalt-Start-Delay ab dem zweiten Run
+      # PTX-JIT kernels are cached — no cold-start delay after the first run
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
     deploy:
       resources:

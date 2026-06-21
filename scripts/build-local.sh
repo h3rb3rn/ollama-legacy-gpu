@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# build-local.sh — Lokaler Build ohne GitHub Actions
-# Verwendung: ./scripts/build-local.sh [cuda12|cuda11|all] [OLLAMA_VERSION]
+# build-local.sh — Local build without GitHub Actions
+# Usage: ./scripts/build-local.sh [cuda12|cuda11|all] [OLLAMA_VERSION]
 #
-# Beispiele:
+# Examples:
 #   ./scripts/build-local.sh cuda12 v0.9.0
 #   ./scripts/build-local.sh all latest
 #   ./scripts/build-local.sh cuda11
@@ -17,13 +17,13 @@ REGISTRY="ghcr.io/${OWNER}/ollama-legacy"
 
 if [ "$VERSION" = "latest" ]; then
   VERSION=$(curl -sf https://api.github.com/repos/ollama/ollama/releases/latest | jq -r '.tag_name')
-  echo "→ Aktuelle Ollama-Version: $VERSION"
+  echo "→ Latest Ollama version: $VERSION"
 fi
 
 SHORT="${VERSION#v}"
 
 build_cuda12() {
-  echo "=== Baue cuda12-maxwell ($VERSION) ==="
+  echo "=== Building cuda12-maxwell ($VERSION) ==="
   docker build \
     -f dockerfiles/Dockerfile.cuda12-maxwell \
     --build-arg OLLAMA_VERSION="$VERSION" \
@@ -31,11 +31,11 @@ build_cuda12() {
     -t "${REGISTRY}:cuda12-maxwell-${SHORT}" \
     -t "${REGISTRY}:cuda12-maxwell-latest" \
     .
-  echo "✓ cuda12-maxwell-${SHORT} fertig"
+  echo "✓ cuda12-maxwell-${SHORT} done"
 }
 
 build_cuda11() {
-  echo "=== Baue cuda11-legacy ($VERSION) ==="
+  echo "=== Building cuda11-legacy ($VERSION) ==="
   docker build \
     -f dockerfiles/Dockerfile.cuda11-legacy \
     --build-arg OLLAMA_VERSION="$VERSION" \
@@ -43,14 +43,14 @@ build_cuda11() {
     -t "${REGISTRY}:cuda11-legacy-${SHORT}" \
     -t "${REGISTRY}:cuda11-legacy-latest" \
     .
-  echo "✓ cuda11-legacy-${SHORT} fertig"
+  echo "✓ cuda11-legacy-${SHORT} done"
 }
 
 case "$TARGET" in
   cuda12) build_cuda12 ;;
   cuda11) build_cuda11 ;;
   all)    build_cuda12; build_cuda11 ;;
-  *)      echo "Unbekanntes Target: $TARGET (cuda12|cuda11|all)"; exit 1 ;;
+  *)      echo "Unknown target: $TARGET (cuda12|cuda11|all)"; exit 1 ;;
 esac
 
 echo ""

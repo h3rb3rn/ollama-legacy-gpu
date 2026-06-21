@@ -1,5 +1,5 @@
-# Deployment für Tesla K80 (CC 3.7, Kepler) — CUDA 11
-# Nutzung: docker compose -f compose/docker-compose.k80.yml up -d
+# Deployment for Tesla K80 (CC 3.7, Kepler) — CUDA 11
+# Usage: docker compose -f compose/docker-compose.k80.yml up -d
 
 services:
   ollama:
@@ -13,8 +13,8 @@ services:
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_KEEP_ALIVE=5m
-      # K80 hat nur 12 GB VRAM pro GPU (24 GB pro Karte, 2 GPUs/Karte)
-      # Kontext auf 8192 begrenzen für stabile VRAM-Nutzung bei 7B-Modellen
+      # K80 has 12 GB VRAM per GPU die (24 GB per card, 2 dies/card)
+      # Limit context to 8192 for stable VRAM usage with 7B models
       - OLLAMA_NUM_CTX=8192
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
     deploy:
