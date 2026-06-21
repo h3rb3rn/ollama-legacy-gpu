@@ -110,12 +110,24 @@ for i in range(count.value):
     # Bandwidth in GB/s: 2 × (bits/8) × MHz / 1000
     bw_gbs = int(2 * (bw_bits / 8) * mhz / 1000)
 
+    # Total VRAM (queried here while NVML is still initialized)
+    class _MemQ(ctypes.Structure):
+        _fields_ = [('total', ctypes.c_ulonglong), ('free', ctypes.c_ulonglong), ('used', ctypes.c_ulonglong)]
+    _mq = _MemQ()
+    vram_bytes = 0
+    try:
+        nvml.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(_mq))
+        vram_bytes = _mq.total
+    except Exception:
+        vram_bytes = 11 * 1024**3  # fallback 11 GB
+
     gpus.append({
         'idx': i,
         'uuid': uuid,
         'name': name,
         'cc': cc,
         'bw_gbs': bw_gbs,
+        'vram_bytes': vram_bytes,
     })
 
 nvml.nvmlShutdown()
@@ -165,20 +177,8 @@ FA_CC_MIN = 75
 fast_pool_gpus = [g for g in gpus if g['cc'] >= FA_CC_MIN]
 fast_pool_uuids = ','.join(g['uuid'] for g in fast_pool_gpus)
 
-# Fast pool total VRAM via NVML
-fast_pool_vram_bytes = 0
-for g in fast_pool_gpus:
-    _idx = gpus.index(g)
-    _handle = ctypes.c_void_p()
-    nvml.nvmlDeviceGetHandleByIndex_v2(_idx, ctypes.byref(_handle))
-    class _Mem(ctypes.Structure):
-        _fields_ = [('total', ctypes.c_ulonglong), ('free', ctypes.c_ulonglong), ('used', ctypes.c_ulonglong)]
-    _mem = _Mem()
-    try:
-        nvml.nvmlDeviceGetMemoryInfo(_handle, ctypes.byref(_mem))
-        fast_pool_vram_bytes += _mem.total
-    except Exception:
-        fast_pool_vram_bytes += 11 * 1024**3
+# Fast pool total VRAM: use cached values from initial NVML query (already shut down)
+fast_pool_vram_bytes = sum(g['vram_bytes'] for g in fast_pool_gpus)
 fast_pool_vram_gb = int(fast_pool_vram_bytes / 1e9)
 
 lines += [
