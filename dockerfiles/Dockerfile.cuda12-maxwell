@@ -38,12 +38,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_GENERATOR=Ninja
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl ca-certificates ninja-build ccache \
+    build-essential git curl ca-certificates ninja-build ccache python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # CMake >= 3.24 required — Ubuntu 22.04 apt only ships 3.22
 RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
     | tar -C /usr/local --strip-components=1 -xz
+
+COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
 
 WORKDIR /src
 RUN git clone --depth=1 \
@@ -57,16 +59,24 @@ RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
        | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
-# Build CUDA v12 runner (preset already includes 50-virtual;52-virtual for Maxwell)
+# Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
+# Separated from build so the tier-fitting patch can be applied in between.
+RUN cmake -S llama/server \
+          --preset llama_cuda_v12_linux \
+          -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
+          -DGGML_CUDA_FA=OFF
+
+# Step 2: GPU-tier-fitting patch (Option 2)
+# Modifies common/fit.cpp to fill fast GPUs (CUDA >= OLLAMA_GPU_TIER_THRESHOLD) first.
+# Only fit.cpp is recompiled — everything else hits the ccache (fast rebuild).
+RUN python3 /tmp/patch-llama-tier-fitting.py /src
+
+# Step 3: cmake build + install
 # NOTE: No --component filter → installs llama-server binary + CUDA libs.
 # --component llama-server only installs .so files, not the binary itself.
 RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
-    cmake -S llama/server \
-          --preset llama_cuda_v12_linux \
-          -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
-          -DGGML_CUDA_FA=OFF \
-    && cmake --build build/llama-server-cuda_v12 \
-             --parallel "${JOBS}" \
+    cmake --build build/llama-server-cuda_v12 \
+          --parallel "${JOBS}" \
     && cmake --install build/llama-server-cuda_v12 \
              --strip
 
