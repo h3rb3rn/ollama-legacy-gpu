@@ -87,22 +87,86 @@ def unload(model: str):
     time.sleep(3)
 
 
-def unload_all_except(keep_model: str):
-    """Unload all loaded models except keep_model to maximize available VRAM.
+def get_free_vram_bytes() -> int:
+    """Sum of free VRAM across all visible GPUs via NVML."""
+    try:
+        import ctypes
+        for lib in ["libnvidia-ml.so.1", "/usr/local/nvidia/lib64/libnvidia-ml.so.1"]:
+            try:
+                nvml = ctypes.CDLL(lib)
+                break
+            except OSError:
+                continue
+        else:
+            return 0
+        nvml.nvmlInit_v2()
+        count = ctypes.c_uint()
+        nvml.nvmlDeviceGetCount_v2(ctypes.byref(count))
+        class _Mem(ctypes.Structure):
+            _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong),
+                        ("used", ctypes.c_ulonglong)]
+        total_free = 0
+        for i in range(count.value):
+            h = ctypes.c_void_p()
+            nvml.nvmlDeviceGetHandleByIndex_v2(i, ctypes.byref(h))
+            m = _Mem()
+            nvml.nvmlDeviceGetMemoryInfo(h, ctypes.byref(m))
+            total_free += m.free
+        nvml.nvmlShutdown()
+        return total_free
+    except Exception:
+        return 0
 
-    Required for large models: with OLLAMA_NUM_PARALLEL>1, the KV-cache
-    multiplier (num_ctx × num_parallel) can cause Ollama's VRAM predictor
-    to reject the load even when weights actually fit. A clean VRAM state
-    ensures the predictor sees the full pool.
+
+def get_model_file_bytes(model: str) -> int:
+    """Get model weight file size from Ollama manifest."""
+    info = api("POST", "/api/show", {"model": model, "verbose": False}, timeout=30)
+    if not info:
+        return 0
+    for layer in info.get("manifest", {}).get("layers", []):
+        if "model" in layer.get("mediaType", ""):
+            return layer.get("size", 0)
+    return 0
+
+
+def evict_others_if_needed(model: str) -> bool:
+    """Evict other models only if the target model + KV-cache likely won't fit.
+
+    Pre-calculates VRAM need from model file size + estimated KV cache:
+      KV estimate = num_ctx × num_parallel × 4 bytes/token × factor
+    Uses free VRAM via NVML. Only evicts if the estimate exceeds 85% of
+    free VRAM — avoids expensive load attempts that would time out.
     """
+    free_bytes = get_free_vram_bytes()
+    model_bytes = get_model_file_bytes(model)
+    if free_bytes <= 0 or model_bytes <= 0:
+        return False  # can't calculate, proceed without eviction
+
+    num_ctx     = int(os.environ.get("OLLAMA_CONTEXT_LENGTH", "131072"))
+    num_parallel = int(os.environ.get("OLLAMA_NUM_PARALLEL", "1"))
+    # Conservative KV estimate: 4 bytes/token (covers f16 with typical GQA)
+    kv_estimate = num_ctx * num_parallel * 4 * 128  # 128 = empirical kv_bytes/token
+    needed = model_bytes + kv_estimate
+
+    free_gb   = free_bytes  / 1e9
+    needed_gb = needed / 1e9
+    print(f"  [vram-check] free={free_gb:.1f} GB, model={model_bytes/1e9:.1f} GB, "
+          f"kv_est={kv_estimate/1e9:.1f} GB (ctx={num_ctx}×{num_parallel}), "
+          f"needed={needed_gb:.1f} GB")
+
+    if needed_gb <= free_gb * 0.85:
+        return False  # fits with headroom — no eviction needed
+
+    print(f"  [vram-check] insufficient VRAM ({needed_gb:.1f} GB > "
+          f"{free_gb*0.85:.1f} GB limit), evicting other models")
     result = api("GET", "/api/ps", timeout=10)
-    if not result:
-        return
-    for m in result.get("models", []):
-        name = m.get("name", "")
-        if name and name != keep_model and not name.startswith(keep_model.split(":")[0]):
-            print(f"  [unload] evicting {name} to free VRAM for benchmark")
-            unload(name)
+    if result:
+        for m in result.get("models", []):
+            name = m.get("name", "")
+            if name and name != model:
+                print(f"  [unload] evicting {name}")
+                unload(name)
+    return True
 
 
 def model_sha(model: str) -> str:
@@ -250,10 +314,8 @@ def optimize(model: str) -> dict:
     sha = model_sha(model)
     print(f"[auto-optimize] optimizing model={model} sha={sha}")
 
-    # Evict other models so the full VRAM pool is available for VRAM prediction.
-    # With OLLAMA_NUM_PARALLEL>1, a co-loaded model reduces free VRAM enough to
-    # push the KV-cache predictor over the limit, causing the load to be rejected.
-    unload_all_except(model)
+    # Evict other models if VRAM budget would be exceeded (large model + KV cache).
+    evict_others_if_needed(model)
 
     # ── Phase 1: Find optimal overhead scale (affects GPU count) ─────────────
     # Binary search / linear scan from lowest scale (fewest GPUs) upward.
