@@ -123,6 +123,23 @@ FORCE_LAYERS_CODE = '''
             if (tensor_split) {{
                 for (size_t _id = 0; _id < nd; _id++) if (tensor_split[_id] > 0) _gpus_used++;
             }}
+            // Safety check: if greedy fill assigned 0 layers (e.g. model too large
+            // for per-layer budget even at adaptive scale), fall back to EQUAL
+            // distribution across all visible GPUs rather than CPU fallback.
+            // CPU fallback is NEVER acceptable when GPUs have capacity.
+            if (_total_layers == 0) {{
+                LOG_WRN("%s: greedy fill assigned 0 layers (budget too tight); "
+                        "falling back to equal distribution across all %zu GPU(s)\\n",
+                        __func__, nd);
+                mparams->n_gpu_layers = hp_ngl + 1;
+                if (nd > 1 && tensor_split) {{
+                    for (size_t _id = 0; _id < nd; _id++) tensor_split[_id] = 1.0f;
+                    mparams->tensor_split = tensor_split;
+                }}
+                tensor_buft_overrides[0] = {{nullptr, nullptr}};
+                mparams->tensor_buft_overrides = tensor_buft_overrides;
+                return;
+            }}
             LOG_INF("%s: {var}=%s → greedy fill: %d/%d layers on %zu/%zu GPU(s), "
                     "%.0f MB/layer (overhead=%.1fx)\\n",
                     __func__, _force, _total_layers, hp_ngl + 1, _gpus_used, nd,
