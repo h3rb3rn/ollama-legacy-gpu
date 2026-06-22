@@ -102,15 +102,35 @@ def tok_per_sec(resp: dict | None) -> float:
 
 
 def gpu_count_used() -> int:
-    """Count GPUs with >500 MiB used (model tensors)."""
+    """Count GPUs with >500 MiB used via NVML ctypes (no nvidia-smi required)."""
     try:
-        out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-            stderr=subprocess.DEVNULL, timeout=5
-        ).decode()
-        return sum(1 for line in out.strip().splitlines() if int(line.strip()) > 500)
+        import ctypes
+        for lib in ["libnvidia-ml.so.1", "/usr/local/nvidia/lib64/libnvidia-ml.so.1"]:
+            try:
+                nvml = ctypes.CDLL(lib)
+                break
+            except OSError:
+                continue
+        else:
+            return 0
+        nvml.nvmlInit_v2()
+        count = ctypes.c_uint()
+        nvml.nvmlDeviceGetCount_v2(ctypes.byref(count))
+        class _Mem(ctypes.Structure):
+            _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong),
+                        ("used", ctypes.c_ulonglong)]
+        result = 0
+        for i in range(count.value):
+            h = ctypes.c_void_p()
+            nvml.nvmlDeviceGetHandleByIndex_v2(i, ctypes.byref(h))
+            m = _Mem()
+            nvml.nvmlDeviceGetMemoryInfo(h, ctypes.byref(m))
+            if m.used > 500 * 1024 * 1024:
+                result += 1
+        nvml.nvmlShutdown()
+        return result
     except Exception:
-        return -1
+        return 0
 
 
 def has_mtp(model: str) -> bool:
@@ -257,6 +277,14 @@ def optimize(model: str) -> dict:
     # Final load with optimal config (no benchmarking, just ensure it's warm)
     extra = {"draft_num_predict": best_draft} if best_draft > 0 else {}
     generate(model, extra, WARMUP_TOKENS)
+
+    if best_tps <= 0:
+        print(f"[auto-optimize] all benchmarks failed (tps=0) — not caching, using default scale={best_scale}",
+              file=sys.stderr)
+        write_override(best_scale)
+        return {"model": model, "sha": sha, "scale": best_scale,
+                "draft_num_predict": 0, "tok_per_sec": 0.0, "gpus": 0,
+                "optimized_at": time.strftime("%Y-%m-%d %H:%M:%S"), "failed": True}
 
     config = {
         "model": model,

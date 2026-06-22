@@ -48,8 +48,9 @@ LISTEN_PORT     = int(os.environ.get("OLLAMA_PROXY_PORT", "11434"))
 OPTIMIZE_SCRIPT = "/usr/local/bin/auto-optimize.py"
 CACHE_DIR       = Path("/root/.ollama/auto-optimize")
 SCALE_OVERRIDE  = Path("/tmp/ollama-scale-override")
-OPTIMIZE_LOCK   = {}  # model → threading.Event (prevent duplicate optimization runs)
-OPTIMIZE_LOCK_MUTEX = threading.Lock()
+OPTIMIZE_LOCK        = {}  # model → threading.Event (prevent duplicate runs per model)
+OPTIMIZE_LOCK_MUTEX  = threading.Lock()
+GLOBAL_OPT_SEMAPHORE = threading.Semaphore(1)  # only one optimizer runs at a time
 
 INFERENCE_PATHS = {"/api/generate", "/api/chat", "/v1/chat/completions",
                    "/v1/responses", "/api/embed", "/api/embeddings"}
@@ -102,24 +103,31 @@ def apply_cached_config(sha: str) -> bool:
 
 
 def run_optimization(model: str, sha: str):
-    """Run auto-optimize.py in background thread (one instance per model)."""
+    """Run auto-optimize.py in background thread.
+
+    Only one optimizer runs at a time (GLOBAL_OPT_SEMAPHORE) to avoid
+    concurrent model reloads interfering with each other's benchmarks.
+    Per-model lock (OPTIMIZE_LOCK) prevents duplicate runs for the same model.
+    """
     with OPTIMIZE_LOCK_MUTEX:
         if sha in OPTIMIZE_LOCK:
-            return  # already optimizing
+            return  # already optimizing or queued
         OPTIMIZE_LOCK[sha] = threading.Event()
 
     try:
         log.info(f"starting background optimization: model={model} sha={sha}")
-        result = subprocess.run(
-            ["python3", OPTIMIZE_SCRIPT, model, BACKEND_URL],
-            capture_output=True, text=True, timeout=3600
-        )
-        if result.returncode == 0:
-            log.info(f"optimization complete: sha={sha}")
-            # Apply the cached result
-            apply_cached_config(sha)
-        else:
-            log.warning(f"optimization failed: {result.stderr[:200]}")
+        # Wait until no other model is being optimized
+        with GLOBAL_OPT_SEMAPHORE:
+            result = subprocess.run(
+                ["python3", OPTIMIZE_SCRIPT, model, BACKEND_URL],
+                capture_output=False,   # let stdout/stderr flow to container logs
+                timeout=3600
+            )
+            if result.returncode == 0:
+                log.info(f"optimization complete: sha={sha}")
+                apply_cached_config(sha)
+            else:
+                log.warning(f"optimization failed (exit {result.returncode}): model={model}")
     except subprocess.TimeoutExpired:
         log.warning(f"optimization timed out after 1h: sha={sha}")
     except Exception as e:
