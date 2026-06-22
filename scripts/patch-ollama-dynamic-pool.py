@@ -36,6 +36,9 @@ INSERT_BEFORE = "params = appendFlashAttentionArgs(params, launch.gpus)"
 
 
 POOL_SELECT_FUNC = '''
+// Imports needed by selectGPUPool (strings for TrimSpace on override file)
+// Note: "strings" and "os" are already imported in llama_server.go.
+
 // selectGPUPool dynamically restricts CUDA_VISIBLE_DEVICES to the fast GPU pool
 // (OLLAMA_FAST_GPU_DEVICES) when the model file fits within the fast pool capacity.
 // This enables Flash Attention on the fast-only pool while still allowing large
@@ -44,7 +47,19 @@ POOL_SELECT_FUNC = '''
 // Env vars (set by gpu-detect.sh):
 //   OLLAMA_FAST_GPU_DEVICES    comma-separated UUID list of fast GPUs (CC >= 7.5)
 //   OLLAMA_FAST_POOL_VRAM_GB   total fast pool VRAM in GB
+//
+// Dynamic override (written by auto-optimize.py between model loads):
+//   /tmp/ollama-scale-override  contains a float OVERHEAD_SCALE value
+//   Read on every call so the auto-optimizer can update between loads.
 func selectGPUPool(launch *llamaServerLaunchConfig) {
+	// Apply auto-optimizer scale override if present
+	const scaleOverrideFile = "/tmp/ollama-scale-override"
+	if data, err := os.ReadFile(scaleOverrideFile); err == nil {
+		if scale := strings.TrimSpace(string(data)); scale != "" {
+			os.Setenv("OLLAMA_LAYER_OVERHEAD_SCALE", scale)
+		}
+	}
+
 	fastDevices := os.Getenv("OLLAMA_FAST_GPU_DEVICES")
 	fastPoolGB  := os.Getenv("OLLAMA_FAST_POOL_VRAM_GB")
 	if fastDevices == "" || fastPoolGB == "" {

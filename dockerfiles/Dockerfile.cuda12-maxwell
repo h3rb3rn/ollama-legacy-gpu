@@ -119,10 +119,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /bin/ollama  /usr/bin/ollama
 COPY --from=builder /runtime     /usr/lib/ollama
 
-# GPU auto-detection and tier-fitting entrypoint
+# GPU auto-detection, tier-fitting entrypoint, and auto-optimizer
 COPY scripts/gpu-detect.sh         /usr/local/bin/gpu-detect.sh
 COPY scripts/ollama-entrypoint.sh  /usr/local/bin/ollama-entrypoint.sh
-RUN chmod +x /usr/local/bin/gpu-detect.sh /usr/local/bin/ollama-entrypoint.sh
+COPY scripts/auto-optimize.py      /usr/local/bin/auto-optimize.py
+RUN chmod +x /usr/local/bin/gpu-detect.sh /usr/local/bin/ollama-entrypoint.sh \
+    && chmod +x /usr/local/bin/auto-optimize.py
 
 # /usr/lib/ollama must be first so libggml-base.so.0 is found when libggml-cuda.so
 # (RPATH=$ORIGIN pointing to cuda_v12/) falls back to LD_LIBRARY_PATH.
