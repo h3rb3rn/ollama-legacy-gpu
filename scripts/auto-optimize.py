@@ -65,19 +65,24 @@ def api(method: str, path: str, body: dict = None, timeout: int = 300) -> dict |
 
 
 def generate(model: str, extra_opts: dict = None, n_tokens: int = BENCHMARK_TOKENS) -> dict | None:
+    # num_ctx must be explicit: without it, Ollama uses the model's native maximum
+    # (e.g. 10M for llama4:scout) for VRAM prediction and refuses to load the model
+    # even when OLLAMA_CONTEXT_LENGTH=131072 is set.
+    num_ctx = int(os.environ.get("OLLAMA_CONTEXT_LENGTH", "131072"))
     return api("POST", "/api/generate", {
         "model": model,
         "prompt": BENCHMARK_PROMPT,
         "stream": False,
-        "options": {"num_predict": n_tokens, **(extra_opts or {})},
-    }, timeout=300)
+        "options": {"num_predict": n_tokens, "num_ctx": num_ctx, **(extra_opts or {})},
+    }, timeout=600)  # 10 min: large models (62 GB) need time to load across 12 GPUs
 
 
 def unload(model: str):
     """Unload model from VRAM (keep_alive=0)."""
+    num_ctx = int(os.environ.get("OLLAMA_CONTEXT_LENGTH", "131072"))
     api("POST", "/api/generate", {
         "model": model, "prompt": "", "stream": False,
-        "keep_alive": "0s", "options": {"num_predict": 0},
+        "keep_alive": "0s", "options": {"num_predict": 0, "num_ctx": num_ctx},
     }, timeout=30)
     time.sleep(3)
 
