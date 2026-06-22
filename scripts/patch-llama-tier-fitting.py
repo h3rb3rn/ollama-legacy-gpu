@@ -112,15 +112,26 @@ FORCE_LAYERS_CODE = '''
                 _total_layers += _n;
             }}
             // Safety: if greedy fill did not place ALL layers (partial or zero fill),
-            // fall back to equal distribution across all visible GPUs.
-            // CPU fallback is NEVER acceptable when GPUs have sufficient total capacity.
+            // fall back to VRAM-weighted distribution — NOT equal distribution.
+            // Equal distribution ignores per-GPU VRAM size: a 8 GB Tesla M10 would
+            // receive the same layer count as a 12 GB RTX 3060, causing OOM on small GPUs.
+            // VRAM-weighted split gives each GPU a share proportional to its free budget.
             if (_total_layers < (uint32_t)(hp_ngl + 1)) {{
-                LOG_WRN("%s: greedy fill placed only %d/%d layers (overhead scale=%.2fx too tight); "
-                        "falling back to equal distribution across %zu GPU(s)\\n",
+                // Compute total budget for normalization
+                float _total_budget = 0.0f;
+                for (size_t _id = 0; _id < nd; _id++) {{
+                    float _b = (float)(dmds_full[_id].free) - (float)margins_s[_id];
+                    if (_b > 0) _total_budget += _b;
+                }}
+                LOG_WRN("%s: greedy fill placed only %d/%d layers (overhead=%.2fx too tight); "
+                        "falling back to VRAM-weighted distribution across %zu GPU(s)\\n",
                         __func__, _total_layers, hp_ngl + 1, _ovhd, nd);
                 mparams->n_gpu_layers = hp_ngl + 1;
-                if (nd > 1 && tensor_split) {{
-                    for (size_t _id = 0; _id < nd; _id++) tensor_split[_id] = 1.0f;
+                if (nd > 1 && tensor_split && _total_budget > 0) {{
+                    for (size_t _id = 0; _id < nd; _id++) {{
+                        float _b = (float)(dmds_full[_id].free) - (float)margins_s[_id];
+                        tensor_split[_id] = (_b > 0) ? (_b / _total_budget) : 0.0f;
+                    }}
                     mparams->tensor_split = tensor_split;
                 }}
                 tensor_buft_overrides[0] = {{nullptr, nullptr}};
