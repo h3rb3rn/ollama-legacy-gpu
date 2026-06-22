@@ -25,9 +25,14 @@ AUTO_OPTIMIZE="${OLLAMA_AUTO_OPTIMIZE:-1}"
 PRIMARY_MODEL="${OLLAMA_PRIMARY_MODEL:-}"
 DETECT_SCRIPT="/usr/local/bin/gpu-detect.sh"
 OPTIMIZE_SCRIPT="/usr/local/bin/auto-optimize.py"
+PROXY_SCRIPT="/usr/local/bin/ollama-proxy.py"
 CONFIG_FILE="/tmp/ollama-gpu-config.env"
 SCALE_OVERRIDE="/tmp/ollama-scale-override"
-OLLAMA_API="http://localhost:11434"
+# Ollama serves internally on 11435; proxy on 11434 intercepts all requests
+OLLAMA_INTERNAL_PORT="${OLLAMA_INTERNAL_PORT:-11435}"
+OLLAMA_PROXY_PORT="${OLLAMA_PROXY_PORT:-11434}"
+OLLAMA_API="http://localhost:${OLLAMA_INTERNAL_PORT}"
+OLLAMA_BACKEND_URL="http://localhost:${OLLAMA_INTERNAL_PORT}"
 
 # ── Step 1: GPU auto-detection ────────────────────────────────────────────────
 if [[ "$AUTODETECT" == "1" ]] && [[ -x "$DETECT_SCRIPT" ]]; then
@@ -71,8 +76,9 @@ echo "  OLLAMA_FLASH_ATTENTION   = ${OLLAMA_FLASH_ATTENTION:-<not set>}"
 echo "  OLLAMA_FAST_POOL_VRAM_GB = ${OLLAMA_FAST_POOL_VRAM_GB:-<not set>}"
 echo "  OLLAMA_LAYER_OVERHEAD_SCALE = ${OLLAMA_LAYER_OVERHEAD_SCALE:-1.4}"
 
-# ── Step 2: Start Ollama in background ───────────────────────────────────────
-echo "[entrypoint] Starting Ollama server..."
+# ── Step 2: Start Ollama on internal port ────────────────────────────────────
+echo "[entrypoint] Starting Ollama server on internal port ${OLLAMA_INTERNAL_PORT}..."
+export OLLAMA_HOST="0.0.0.0:${OLLAMA_INTERNAL_PORT}"
 /usr/bin/ollama "$@" &
 OLLAMA_PID=$!
 
@@ -93,38 +99,37 @@ if [[ $WAIT_SECS -ge $MAX_WAIT ]]; then
     echo "[entrypoint] Ollama API not ready after ${MAX_WAIT}s, continuing anyway"
 fi
 
-# ── Step 4: Auto-Optimizer ────────────────────────────────────────────────────
-if [[ "$AUTO_OPTIMIZE" == "1" ]] && [[ -x "$OPTIMIZE_SCRIPT" ]] && [[ -n "$PRIMARY_MODEL" ]]; then
-    echo "[entrypoint] Launching auto-optimizer for model: $PRIMARY_MODEL"
-    (
-        # Give Ollama a moment to settle
-        sleep 5
+# ── Step 4: Start Auto-Optimize Proxy ────────────────────────────────────────
+if [[ "$AUTO_OPTIMIZE" == "1" ]] && [[ -x "$PROXY_SCRIPT" ]]; then
+    echo "[entrypoint] Starting auto-optimize proxy on port ${OLLAMA_PROXY_PORT}..."
+    export OLLAMA_BACKEND_URL OLLAMA_PROXY_PORT
+    python3 "$PROXY_SCRIPT" \
+        --backend "$OLLAMA_BACKEND_URL" \
+        --port "$OLLAMA_PROXY_PORT" &
+    PROXY_PID=$!
+    echo "[entrypoint] Proxy running (PID=$PROXY_PID) on :${OLLAMA_PROXY_PORT} → ${OLLAMA_BACKEND_URL}"
 
-        # Check if model is available
-        if ! curl -sf "$OLLAMA_API/api/tags" | python3 -c "
+    # Pre-optimize PRIMARY_MODEL if set (speeds up first real request)
+    if [[ -n "$PRIMARY_MODEL" ]] && [[ -x "$OPTIMIZE_SCRIPT" ]]; then
+        echo "[entrypoint] Pre-optimizing primary model: $PRIMARY_MODEL"
+        (
+            sleep 10  # let proxy settle
+            # Check model exists
+            if curl -sf "$OLLAMA_API/api/tags" 2>/dev/null | python3 -c "
 import json,sys
-tags = json.load(sys.stdin)
-names = [m['name'] for m in tags.get('models', [])]
-primary = '$PRIMARY_MODEL'
-# Check both with and without :latest suffix
-if primary in names or primary + ':latest' in names or any(n.startswith(primary) for n in names):
-    sys.exit(0)
-sys.exit(1)
+t=json.load(sys.stdin); n=[m['name'] for m in t.get('models',[])]
+sys.exit(0 if '$PRIMARY_MODEL' in n or '$PRIMARY_MODEL:latest' in n or any(x.startswith('$PRIMARY_MODEL') for x in n) else 1)
 " 2>/dev/null; then
-            echo "[auto-optimizer] Model '$PRIMARY_MODEL' not found locally, skipping optimization"
-            exit 0
-        fi
-
-        echo "[auto-optimizer] Starting optimization for $PRIMARY_MODEL..."
-        python3 "$OPTIMIZE_SCRIPT" "$PRIMARY_MODEL" "$OLLAMA_API"
-        echo "[auto-optimizer] Optimization complete"
-    ) &
-    AUTO_OPT_PID=$!
-    echo "[entrypoint] Auto-optimizer running in background (PID=$AUTO_OPT_PID)"
-else
-    if [[ -z "$PRIMARY_MODEL" ]]; then
-        echo "[entrypoint] Auto-optimizer: set OLLAMA_PRIMARY_MODEL to enable optimization"
+                echo "[pre-optimize] Starting: $PRIMARY_MODEL"
+                python3 "$OPTIMIZE_SCRIPT" "$PRIMARY_MODEL" "$OLLAMA_API"
+                echo "[pre-optimize] Complete"
+            fi
+        ) &
     fi
+else
+    echo "[entrypoint] Auto-optimize proxy disabled (OLLAMA_AUTO_OPTIMIZE=0)"
+    echo "[entrypoint] WARNING: requests will go to internal port ${OLLAMA_INTERNAL_PORT} directly"
+    echo "[entrypoint]          Set a port redirect or use OLLAMA_HOST in clients"
 fi
 
 # ── Step 5: Keep container alive ─────────────────────────────────────────────
