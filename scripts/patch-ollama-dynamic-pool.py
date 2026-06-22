@@ -82,26 +82,32 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 	if launch.extraEnvs == nil {
 		launch.extraEnvs = make(map[string]string)
 	}
-	// Always use greedy fill: fill best GPUs completely before moving to slower ones.
-	// Fewer GPUs in the pipeline = less inter-GPU overhead = higher tok/s.
-	// The greedy fill in fit.cpp respects CUDA_VISIBLE_DEVICES ordering (worst→best),
-	// so RTX3060→RTX2060→GTX→Tesla order is automatically honoured.
-	launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
-	os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
 
 	if modelBytes <= thresholdBytes {
-		// Model fits in fast pool → restrict to fast GPUs + enable FA
+		// Model fits in fast pool (RTX-only, FA-capable GPUs).
+		// Use greedy fill: fill best RTX GPU completely before moving to next.
+		// Fewer GPUs in the pipeline = less inter-GPU overhead = higher tok/s.
+		// Safe: RTX GPUs support FA → compute buffers are O(seq_len), not O(seq_len²).
 		slog.Info("dynamic GPU pool: model fits in fast pool, restricting to fast GPUs",
 			"model_gb", modelBytes/(1<<30),
 			"pool_gb", poolGB,
 			"devices", fastDevices)
 		launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = fastDevices
+		launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
+		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 	} else {
-		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (greedy fill)",
+		// Model requires full GPU pool (Tesla present).
+		// Do NOT force greedy fill: Tesla GPUs (CC 5.0/5.2) lack Flash Attention, so
+		// the standard attention Q×K^T compute buffer is O(batch × seq_len) per GPU.
+		// Greedy fill overrides Ollama's conservative compute-buffer-aware fitting,
+		// causing OOM on Tesla M10/M60 (8 GB). Let Ollama's standard algorithm run —
+		// it accounts for compute buffers and may leave a few layers on CPU if needed.
+		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (standard fitting)",
 			"model_gb", modelBytes/(1<<30),
 			"threshold_gb", thresholdBytes/(1<<30))
+		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
 		// FA off: full pool includes Tesla/GTX which lack FA support
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "false")
 	}
