@@ -87,6 +87,24 @@ def unload(model: str):
     time.sleep(3)
 
 
+def unload_all_except(keep_model: str):
+    """Unload all loaded models except keep_model to maximize available VRAM.
+
+    Required for large models: with OLLAMA_NUM_PARALLEL>1, the KV-cache
+    multiplier (num_ctx × num_parallel) can cause Ollama's VRAM predictor
+    to reject the load even when weights actually fit. A clean VRAM state
+    ensures the predictor sees the full pool.
+    """
+    result = api("GET", "/api/ps", timeout=10)
+    if not result:
+        return
+    for m in result.get("models", []):
+        name = m.get("name", "")
+        if name and name != keep_model and not name.startswith(keep_model.split(":")[0]):
+            print(f"  [unload] evicting {name} to free VRAM for benchmark")
+            unload(name)
+
+
 def model_sha(model: str) -> str:
     """Get first 12 chars of GGUF blob SHA for cache key."""
     info = api("POST", "/api/show", {"model": model, "verbose": False}, timeout=30)
@@ -231,6 +249,11 @@ def optimize(model: str) -> dict:
     """
     sha = model_sha(model)
     print(f"[auto-optimize] optimizing model={model} sha={sha}")
+
+    # Evict other models so the full VRAM pool is available for VRAM prediction.
+    # With OLLAMA_NUM_PARALLEL>1, a co-loaded model reduces free VRAM enough to
+    # push the KV-cache predictor over the limit, causing the load to be rejected.
+    unload_all_except(model)
 
     # ── Phase 1: Find optimal overhead scale (affects GPU count) ─────────────
     # Binary search / linear scan from lowest scale (fewest GPUs) upward.
