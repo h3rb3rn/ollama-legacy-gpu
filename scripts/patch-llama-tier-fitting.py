@@ -46,30 +46,64 @@ SOURCE_FILE      = "common/fit.cpp"
 # Used by Dynamic Pool when model file size fits in the fast GPU pool.
 # This is safe because selectGPUPool() already verified model_size <= 75% of pool.
 FORCE_LAYERS_CODE = '''
-    // [OLLAMA_FORCE_GPU_LAYERS patch] When set by Ollama's dynamic GPU pool selector
-    // (selectGPUPool in llm/llama_server.go), bypass the fitting algorithm entirely
-    // and place ALL model layers on GPU with equal distribution across visible devices.
-    // This is safe: caller has already verified model size <= 75% of available VRAM.
+    // [OLLAMA_FORCE_GPU_LAYERS patch] Greedy sequential GPU filling.
+    // Bypasses the conservative fitting algorithm. Fills best GPUs (highest CUDA
+    // index = highest bandwidth) first until all model layers are placed.
+    // Uses minimum number of GPUs needed — fewer GPUs = shorter pipeline = faster.
+    // Caller (selectGPUPool) verified model_size <= 75% of fast pool VRAM.
     {{
         const char * _force = std::getenv("{var}");
         if (_force && _force[0] && std::atoi(_force) > 0) {{
-            // Set n_gpu_layers = all layers
-            mparams->n_gpu_layers = hp_ngl + 1;
-            // Equal tensor split across all visible GPU devices
-            if (nd > 1 && tensor_split) {{
-                for (size_t _id = 0; _id < nd; _id++) {{
-                    tensor_split[_id] = 1.0f; // equal weight; llama.cpp normalizes
-                }}
-                mparams->tensor_split = tensor_split;
+            // Compute model bytes per layer from actual dmds_full measurement
+            int64_t _sum_model_bytes = 0;
+            for (size_t _id = 0; _id < nd; _id++) {{
+                _sum_model_bytes += dmds_full[_id].mb.model;
             }}
-            // Clear tensor_buft_overrides (no partial-layer overflow)
+            // Overhead factor: accounts for KV-cache + compute buffers + alignment.
+            // OLLAMA_LAYER_OVERHEAD_SCALE overrides default 1.4 (40% overhead).
+            float _ovhd = 1.4f;
+            if (const char * _s = std::getenv("OLLAMA_LAYER_OVERHEAD_SCALE")) {{
+                float _v = std::stof(_s);
+                if (_v > 1.0f && _v < 5.0f) _ovhd = _v;
+            }}
+            float _bytes_per_layer = (_sum_model_bytes > 0 && hp_ngl > 0) ?
+                ((float)_sum_model_bytes / hp_ngl) * _ovhd :
+                600.0f * 1024 * 1024 * _ovhd; // 600 MB fallback
+
+            // Greedy sequential fill: best GPU (highest CUDA index) first
+            uint32_t _layers_left  = hp_ngl + 1;
+            uint32_t _total_layers = 0;
+            for (int _id = (int)nd - 1; _id >= 0 && _layers_left > 0; _id--) {{
+                int64_t _budget = dmds_full[_id].free - margins[_id];
+                uint32_t _n = (_budget > 0) ?
+                    std::min(_layers_left, (uint32_t)((float)_budget / _bytes_per_layer)) : 0;
+                if (tensor_split) tensor_split[_id] = (float)_n;
+                _layers_left  -= _n;
+                _total_layers += _n;
+            }}
+            // Zero out unused GPUs (lower CUDA indices that were not needed)
+            if (tensor_split && _total_layers == hp_ngl + 1) {{
+                for (int _id = (int)nd - 1; _id >= 0; _id--) {{
+                    if (tensor_split[_id] == 0) break; // reached unused range
+                    // non-zero entries remain as-is
+                }}
+            }}
+            mparams->n_gpu_layers = _total_layers;
+            if (nd > 1 && tensor_split) mparams->tensor_split = tensor_split;
             if (tensor_buft_overrides) {{
                 tensor_buft_overrides[0].pattern = nullptr;
                 tensor_buft_overrides[0].buft    = nullptr;
                 mparams->tensor_buft_overrides    = tensor_buft_overrides;
             }}
-            LOG_INF("%s: {var}=%s → forcing %d/%d layers to GPU across %zu device(s)\\n",
-                    __func__, _force, mparams->n_gpu_layers, hp_ngl + 1, nd);
+            // Count GPUs actually used
+            size_t _gpus_used = 0;
+            if (tensor_split) {{
+                for (size_t _id = 0; _id < nd; _id++) if (tensor_split[_id] > 0) _gpus_used++;
+            }}
+            LOG_INF("%s: {var}=%s → greedy fill: %d/%d layers on %zu/%zu GPU(s), "
+                    "%.0f MB/layer (overhead=%.1fx)\\n",
+                    __func__, _force, _total_layers, hp_ngl + 1, _gpus_used, nd,
+                    _bytes_per_layer / 1024 / 1024, _ovhd);
             return;
         }}
     }}
