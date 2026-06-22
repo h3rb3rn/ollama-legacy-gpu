@@ -142,16 +142,68 @@ def extract_model(path: str, body: bytes) -> str | None:
         return None
 
 
-def maybe_optimize_model(model: str | None):
-    """Check model cache; trigger optimization if stale/missing."""
-    if not model:
-        return
+def get_cached_draft(sha: str) -> int:
+    """Return optimal draft_num_predict from cache (0 = disabled)."""
+    cache_file = CACHE_DIR / f"{sha}.json"
+    if cache_file.exists():
+        try:
+            config = json.loads(cache_file.read_text())
+            return config.get("draft_num_predict", 0)
+        except Exception:
+            pass
+    return 0
+
+
+def inject_optimal_options(body: bytes, sha: str) -> bytes:
+    """
+    Inject cached optimal options (draft_num_predict) into request body.
+    Only adds options not already set by the caller.
+    """
     try:
-        sha = get_model_sha(model)
+        data = json.loads(body)
+    except Exception:
+        return body
+
+    draft_n = get_cached_draft(sha)
+    if draft_n <= 0:
+        return body
+
+    # Don't override if caller explicitly set draft_num_predict
+    opts = data.setdefault("options", {})
+    if "draft_num_predict" not in opts:
+        opts["draft_num_predict"] = draft_n
+        log.debug(f"injected draft_num_predict={draft_n} for sha={sha[:8]}")
+        return json.dumps(data).encode()
+
+    return body
+
+
+# Track model→sha mapping (reduces API calls)
+_sha_cache: dict[str, str] = {}
+_sha_lock = threading.Lock()
+
+
+def get_sha_cached(model: str) -> str:
+    with _sha_lock:
+        if model in _sha_cache:
+            return _sha_cache[model]
+    sha = get_model_sha(model)
+    if sha:
+        with _sha_lock:
+            _sha_cache[model] = sha
+    return sha or ""
+
+
+def maybe_optimize_model(model: str | None) -> str:
+    """Check model cache; trigger optimization if stale/missing. Returns sha."""
+    if not model:
+        return ""
+    try:
+        sha = get_sha_cached(model)
         if not sha:
-            return
+            return ""
         if apply_cached_config(sha):
-            return  # cached, applied
+            return sha  # cached, applied
         # No cache: trigger background optimization (non-blocking)
         with OPTIMIZE_LOCK_MUTEX:
             if sha not in OPTIMIZE_LOCK:
@@ -165,8 +217,10 @@ def maybe_optimize_model(model: str | None):
                 log.info(f"triggered optimization for new model: {model} ({sha})")
             else:
                 log.debug(f"optimization already running for: {model}")
+        return sha
     except Exception as e:
         log.debug(f"maybe_optimize error: {e}")
+        return ""
 
 
 # ── HTTP Proxy Handler ────────────────────────────────────────────────────────
@@ -187,12 +241,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # Check if this is an inference request worth optimizing
         if self.path in INFERENCE_PATHS and method == "POST":
             model = extract_model(self.path, body)
-            # Run optimization check in background (non-blocking)
-            threading.Thread(
-                target=maybe_optimize_model,
-                args=(model,),
-                daemon=True
-            ).start()
+            if model:
+                # Run optimization check (fast path: returns sha from cache)
+                sha = maybe_optimize_model(model)
+                # Inject optimal draft settings if cached
+                if sha and body:
+                    body = inject_optimal_options(body, sha)
 
         # Forward to backend
         try:
