@@ -252,23 +252,30 @@ def optimize(model: str) -> dict:
 
     print(f"  Best scale: {best_scale} → {best_tps:.1f} tok/s on {best_gpus} GPU(s)")
 
-    # ── Phase 2: Spec decoding test at best scale ─────────────────────────────
+    # ── Phase 2: Spec decoding test at ALL scales ────────────────────────────────
+    # MTP benefit depends on per-GPU forward-pass time, which varies with GPU count.
+    # Optimal (scale, draft) combination may differ from optimal scale without MTP.
+    # Example: scale=1.6 (4 GPUs, shorter passes) + MTP can beat scale=1.1 (3 GPUs)
+    # without MTP, even though scale=1.1 wins in the no-MTP Phase 1 comparison.
     best_draft = 0
     mtp_available = has_mtp(model)
 
     if mtp_available:
-        print(f"Phase 2: MTP spec decoding test (model has built-in draft)")
-        write_override(best_scale)
-
-        for draft_n in DRAFT_CANDIDATES:
-            if draft_n == 0:
-                continue  # baseline already measured
-            tps, gpus = run_benchmark(model, best_scale, draft_n=draft_n,
-                                      label=f"draft={draft_n}")
-            if tps > best_tps * 1.05:  # must be >5% improvement
-                best_tps  = tps
-                best_draft = draft_n
-                print(f"    Draft n={draft_n} is better!")
+        print(f"Phase 2: MTP spec decoding test at all scales")
+        for scale in SCALE_CANDIDATES:
+            if scale_results.get(scale, (0, 0))[0] <= 0:
+                continue  # skip scales that failed in Phase 1
+            for draft_n in DRAFT_CANDIDATES:
+                if draft_n == 0:
+                    continue  # baseline already measured in Phase 1
+                tps, gpus = run_benchmark(model, scale, draft_n=draft_n,
+                                          label=f"scale={scale} draft={draft_n}")
+                if tps > best_tps * 1.05:  # must be >5% improvement over current best
+                    best_tps   = tps
+                    best_scale = scale
+                    best_draft = draft_n
+                    best_gpus  = gpus
+                    print(f"    scale={scale} draft={draft_n} is new best!")
 
     # ── Restore optimal settings ──────────────────────────────────────────────
     write_override(best_scale)
