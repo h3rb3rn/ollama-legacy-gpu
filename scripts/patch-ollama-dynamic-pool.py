@@ -79,28 +79,30 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 	}
 	modelBytes := info.Size()
 
+	if launch.extraEnvs == nil {
+		launch.extraEnvs = make(map[string]string)
+	}
+	// Always use greedy fill: fill best GPUs completely before moving to slower ones.
+	// Fewer GPUs in the pipeline = less inter-GPU overhead = higher tok/s.
+	// The greedy fill in fit.cpp respects CUDA_VISIBLE_DEVICES ordering (worst→best),
+	// so RTX3060→RTX2060→GTX→Tesla order is automatically honoured.
+	launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
+	os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
+
 	if modelBytes <= thresholdBytes {
 		// Model fits in fast pool → restrict to fast GPUs + enable FA
 		slog.Info("dynamic GPU pool: model fits in fast pool, restricting to fast GPUs",
 			"model_gb", modelBytes/(1<<30),
 			"pool_gb", poolGB,
 			"devices", fastDevices)
-		if launch.extraEnvs == nil {
-			launch.extraEnvs = make(map[string]string)
-		}
 		launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = fastDevices
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)
-		// This overrides the global OLLAMA_FLASH_ATTENTION=off setting.
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
-			// Force ALL model layers to GPU: bypass conservative compute-buffer fitting.
-			// Safe: model_size <= 75% of fast pool verified above.
-			os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
 	} else {
-		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
-		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs",
+		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (greedy fill)",
 			"model_gb", modelBytes/(1<<30),
 			"threshold_gb", thresholdBytes/(1<<30))
-		// Restore FA to off (Tesla present in full pool)
+		// FA off: full pool includes Tesla/GTX which lack FA support
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "false")
 	}
 }

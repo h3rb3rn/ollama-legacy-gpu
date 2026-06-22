@@ -8,9 +8,9 @@ services:
   # GPU 11:      GTX 1060                              6 GB  sm_6.1
   # Total:       ~114 GB VRAM — fits models up to ~80 GB (weights + KV-cache)
   #
-  # Image: ghcr.io/h3rb3rn/ollama-legacy (CUDA 12.0.1, CC 50-virtual→90a)
-  #   PTX-JIT for Tesla M10/M60 (CC 5.0/5.2) — one-time JIT compilation on first load,
-  #   then cached in /opt/ollama/models/cuda-cache.
+  # Image: ghcr.io/h3rb3rn/ollama-legacy (CUDA 12.0.1, CC 50-real→90-real)
+  #   All architectures compiled as native CUBIN (-real), no PTX-JIT.
+  #   Instant startup for Tesla M10/M60 — no cold-start penalty.
   #
   # Source: https://github.com/h3rb3rn/ollama-legacy-gpu
   ollama:

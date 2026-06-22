@@ -93,44 +93,31 @@ FORCE_LAYERS_CODE = '''
                 ((float)_sum_model_bytes / hp_ngl) * _ovhd :
                 600.0f * 1024 * 1024 * _ovhd; // 600 MB fallback
 
-            // Greedy sequential fill: best GPU (highest CUDA index) first
+            // Initialize all tensor_split to 0 so GPUs not reached by greedy loop
+            // get 0 layers (not stale values from earlier in the function).
+            if (tensor_split) {{
+                for (size_t _id = 0; _id < nd; _id++) tensor_split[_id] = 0.0f;
+            }}
+            // Greedy sequential fill: best GPU (highest CUDA index) first.
+            // Fills GPUs completely before moving to the next — minimum GPU count,
+            // maximum per-GPU utilization, lowest pipeline overhead.
             uint32_t _layers_left  = hp_ngl + 1;
             uint32_t _total_layers = 0;
             for (int _id = (int)nd - 1; _id >= 0 && _layers_left > 0; _id--) {{
-                int64_t _budget = dmds_full[_id].free - (int64_t)margins_s[_id]; // margins not yet declared here
+                int64_t _budget = dmds_full[_id].free - (int64_t)margins_s[_id];
                 uint32_t _n = (_budget > 0) ?
                     std::min(_layers_left, (uint32_t)((float)_budget / _bytes_per_layer)) : 0;
                 if (tensor_split) tensor_split[_id] = (float)_n;
                 _layers_left  -= _n;
                 _total_layers += _n;
             }}
-            // Zero out unused GPUs (lower CUDA indices that were not needed)
-            if (tensor_split && _total_layers == hp_ngl + 1) {{
-                for (int _id = (int)nd - 1; _id >= 0; _id--) {{
-                    if (tensor_split[_id] == 0) break; // reached unused range
-                    // non-zero entries remain as-is
-                }}
-            }}
-            mparams->n_gpu_layers = _total_layers;
-            if (nd > 1 && tensor_split) mparams->tensor_split = tensor_split;
-            if (tensor_buft_overrides) {{
-                tensor_buft_overrides[0].pattern = nullptr;
-                tensor_buft_overrides[0].buft    = nullptr;
-                mparams->tensor_buft_overrides    = tensor_buft_overrides;
-            }}
-            // Count GPUs actually used
-            size_t _gpus_used = 0;
-            if (tensor_split) {{
-                for (size_t _id = 0; _id < nd; _id++) if (tensor_split[_id] > 0) _gpus_used++;
-            }}
-            // Safety check: if greedy fill assigned 0 layers (e.g. model too large
-            // for per-layer budget even at adaptive scale), fall back to EQUAL
-            // distribution across all visible GPUs rather than CPU fallback.
-            // CPU fallback is NEVER acceptable when GPUs have capacity.
-            if (_total_layers == 0) {{
-                LOG_WRN("%s: greedy fill assigned 0 layers (budget too tight); "
-                        "falling back to equal distribution across all %zu GPU(s)\\n",
-                        __func__, nd);
+            // Safety: if greedy fill did not place ALL layers (partial or zero fill),
+            // fall back to equal distribution across all visible GPUs.
+            // CPU fallback is NEVER acceptable when GPUs have sufficient total capacity.
+            if (_total_layers < (uint32_t)(hp_ngl + 1)) {{
+                LOG_WRN("%s: greedy fill placed only %d/%d layers (overhead scale=%.2fx too tight); "
+                        "falling back to equal distribution across %zu GPU(s)\\n",
+                        __func__, _total_layers, hp_ngl + 1, _ovhd, nd);
                 mparams->n_gpu_layers = hp_ngl + 1;
                 if (nd > 1 && tensor_split) {{
                     for (size_t _id = 0; _id < nd; _id++) tensor_split[_id] = 1.0f;
@@ -140,10 +127,22 @@ FORCE_LAYERS_CODE = '''
                 mparams->tensor_buft_overrides = tensor_buft_overrides;
                 return;
             }}
+            // Count GPUs actually used (greedy: only highest-bandwidth GPUs)
+            size_t _gpus_used = 0;
+            if (tensor_split) {{
+                for (size_t _id = 0; _id < nd; _id++) if (tensor_split[_id] > 0) _gpus_used++;
+            }}
             LOG_INF("%s: {var}=%s → greedy fill: %d/%d layers on %zu/%zu GPU(s), "
                     "%.0f MB/layer (overhead=%.1fx)\\n",
                     __func__, _force, _total_layers, hp_ngl + 1, _gpus_used, nd,
                     _bytes_per_layer / 1024 / 1024, _ovhd);
+            mparams->n_gpu_layers = _total_layers;
+            if (nd > 1 && tensor_split) mparams->tensor_split = tensor_split;
+            if (tensor_buft_overrides) {{
+                tensor_buft_overrides[0].pattern = nullptr;
+                tensor_buft_overrides[0].buft    = nullptr;
+                mparams->tensor_buft_overrides    = tensor_buft_overrides;
+            }}
             return;
         }}
     }}
