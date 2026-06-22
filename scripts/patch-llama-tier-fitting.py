@@ -59,12 +59,35 @@ FORCE_LAYERS_CODE = '''
             for (size_t _id = 0; _id < nd; _id++) {{
                 _sum_model_bytes += dmds_full[_id].mb.model;
             }}
-            // Overhead factor: accounts for KV-cache + compute buffers + alignment.
-            // OLLAMA_LAYER_OVERHEAD_SCALE overrides default 1.4 (40% overhead).
-            float _ovhd = 1.4f;
+            // Overhead scale: accounts for compute buffers + KV-cache + alignment overhead.
+            //
+            // Adaptive mode (default): overhead is ~fixed per GPU regardless of quantization.
+            //   With FA, compute buffers ≈ 1.5 GB/GPU for 131k context.
+            //   KV-cache (q4_0, 131k, 10 attn layers) ≈ 0.7 GB total.
+            //   Fixed overhead per layer ≈ (1.5 × nd + 0.7) GB / hp_ngl
+            //
+            // Example: Q4_K_M (542 MB/layer): scale ≈ 1 + 357/542 = 1.66... but capped at 1.4
+            //          Q8_0  (1047 MB/layer): scale ≈ 1 + 357/1047 = 1.34 → fewer GPUs needed
+            //          FP16  (2095 MB/layer): scale ≈ 1 + 357/2095 = 1.17 → even fewer GPUs
+            //
+            // OLLAMA_LAYER_OVERHEAD_SCALE overrides the adaptive calculation.
+            // OLLAMA_OVERHEAD_PER_GPU_MB sets fixed overhead per GPU in MB (default 1536).
+            float _overhead_mb_per_gpu = 1536.0f; // 1.5 GB compute + KV fraction
+            if (const char * _o = std::getenv("OLLAMA_OVERHEAD_PER_GPU_MB")) {{
+                float _v = std::stof(_o);
+                if (_v > 0 && _v < 10240) _overhead_mb_per_gpu = _v;
+            }}
+            // Adaptive scale: total overhead / total layer weight
+            float _total_overhead_mb = _overhead_mb_per_gpu * nd;
+            float _total_model_mb    = (float)_sum_model_bytes / (1024.0f * 1024.0f);
+            float _adaptive_scale    = 1.0f + (_total_overhead_mb / _total_model_mb);
+            // Cap adaptive scale: not too aggressive (min 1.05) or too conservative (max 2.0)
+            _adaptive_scale = std::max(1.05f, std::min(2.0f, _adaptive_scale));
+
+            float _ovhd = _adaptive_scale; // default: adaptive
             if (const char * _s = std::getenv("OLLAMA_LAYER_OVERHEAD_SCALE")) {{
                 float _v = std::stof(_s);
-                if (_v > 1.0f && _v < 5.0f) _ovhd = _v;
+                if (_v > 1.0f && _v < 5.0f) _ovhd = _v; // explicit override wins
             }}
             float _bytes_per_layer = (_sum_model_bytes > 0 && hp_ngl > 0) ?
                 ((float)_sum_model_bytes / hp_ngl) * _ovhd :
@@ -74,7 +97,7 @@ FORCE_LAYERS_CODE = '''
             uint32_t _layers_left  = hp_ngl + 1;
             uint32_t _total_layers = 0;
             for (int _id = (int)nd - 1; _id >= 0 && _layers_left > 0; _id--) {{
-                int64_t _budget = dmds_full[_id].free - margins[_id];
+                int64_t _budget = dmds_full[_id].free - (int64_t)margins_s[_id]; // margins not yet declared here
                 uint32_t _n = (_budget > 0) ?
                     std::min(_layers_left, (uint32_t)((float)_budget / _bytes_per_layer)) : 0;
                 if (tensor_split) tensor_split[_id] = (float)_n;
