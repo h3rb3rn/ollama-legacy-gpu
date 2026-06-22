@@ -35,10 +35,45 @@ from pathlib import Path
 
 PATCH_GUARD    = "OLLAMA_GPU_TIER_THRESHOLD"
 LOOP_MARKER    = "for (int id = nd - 1; id >= 0; id--) {"
-DENSE_LOG      = 'filling dense layers back-to-front:'
-NO_CHANGES_STR = 'targets for free memory can be met on all devices, no changes needed'
-TARGETS_STR    = 'targets.push_back(dmds_full[id].free - margins[id]);'
-SOURCE_FILE    = "common/fit.cpp"
+DENSE_LOG        = 'filling dense layers back-to-front:'
+NO_CHANGES_STR   = 'targets for free memory can be met on all devices, no changes needed'
+TARGETS_STR      = 'targets.push_back(dmds_full[id].free - margins[id]);'
+FORCE_LAYERS_VAR = 'OLLAMA_FORCE_GPU_LAYERS'
+SOURCE_FILE      = "common/fit.cpp"
+
+# Patch 0: OLLAMA_FORCE_GPU_LAYERS — bypasses the entire fitting algorithm
+# and forces n_gpu_layers = hp_ngl+1 (all) with equal tensor_split.
+# Used by Dynamic Pool when model file size fits in the fast GPU pool.
+# This is safe because selectGPUPool() already verified model_size <= 75% of pool.
+FORCE_LAYERS_CODE = '''
+    // [OLLAMA_FORCE_GPU_LAYERS patch] When set by Ollama's dynamic GPU pool selector
+    // (selectGPUPool in llm/llama_server.go), bypass the fitting algorithm entirely
+    // and place ALL model layers on GPU with equal distribution across visible devices.
+    // This is safe: caller has already verified model size <= 75% of available VRAM.
+    {{
+        const char * _force = std::getenv("{var}");
+        if (_force && _force[0] && std::atoi(_force) > 0) {{
+            // Set n_gpu_layers = all layers
+            mparams->n_gpu_layers = hp_ngl + 1;
+            // Equal tensor split across all visible GPU devices
+            if (nd > 1 && tensor_split) {{
+                for (size_t _id = 0; _id < nd; _id++) {{
+                    tensor_split[_id] = 1.0f; // equal weight; llama.cpp normalizes
+                }}
+                mparams->tensor_split = tensor_split;
+            }}
+            // Clear tensor_buft_overrides (no partial-layer overflow)
+            if (tensor_buft_overrides) {{
+                tensor_buft_overrides[0].pattern = nullptr;
+                tensor_buft_overrides[0].buft    = nullptr;
+                mparams->tensor_buft_overrides    = tensor_buft_overrides;
+            }}
+            LOG_INF("%s: {var}=%s → forcing %d/%d layers to GPU across %zu device(s)\\n",
+                    __func__, _force, mparams->n_gpu_layers, hp_ngl + 1, nd);
+            return;
+        }}
+    }}
+'''.format(var=FORCE_LAYERS_VAR)
 
 
 def find_fit_cpp(ollama_root: Path) -> Path | None:
@@ -246,6 +281,36 @@ def apply_patch2_targets_and_loop(content: str, indent: str, lines: list) -> tup
     return content, True
 
 
+def apply_patch0_force_layers(content: str) -> tuple[str, bool]:
+    """
+    Patch 0: OLLAMA_FORCE_GPU_LAYERS early return.
+    Inserted near the beginning of common_params_fit_impl, after nd is computed.
+    """
+    # Find where nd (number of devices) is computed and used first
+    # Anchor: the line that first uses nd in a meaningful way
+    anchor = 'const size_t nd = devs.size();'
+    if anchor not in content:
+        # Try alternative
+        anchor2 = 'const size_t nd'
+        if anchor2 not in content:
+            return content, False
+        idx = content.find(anchor2)
+    else:
+        idx = content.find(anchor)
+
+    # Find end of that line
+    end_of_line = content.find('\n', idx)
+    if end_of_line == -1:
+        return content, False
+
+    # Insert Patch 0 after that line
+    new_content = content[:end_of_line + 1] + FORCE_LAYERS_CODE + content[end_of_line + 1:]
+    if new_content == content:
+        return content, False
+
+    return new_content, True
+
+
 def patch(path: Path) -> bool:
     content = path.read_text()
 
@@ -261,6 +326,20 @@ def patch(path: Path) -> bool:
 
     # Determine indent from the filling loop line
     indent = re.match(r'^(\s*)', lines[loop_start]).group(1) if loop_start else '    '
+
+    # Apply Patch 0: OLLAMA_FORCE_GPU_LAYERS early return
+    content, ok0 = apply_patch0_force_layers(content)
+    if not ok0:
+        print(f"  Patch 0 (FORCE_GPU_LAYERS) failed", file=sys.stderr)
+        return False
+    print(f"  Patch 0 applied: OLLAMA_FORCE_GPU_LAYERS bypass")
+
+    # Re-read lines after Patch 0 changed content
+    lines = content.splitlines(keepends=True)
+    loop_start = next((i for i, l in enumerate(lines) if LOOP_MARKER in l), None)
+    if loop_start is None:
+        print(f"  Loop marker lost after Patch 0", file=sys.stderr)
+        return False
 
     # Apply Patch 1: bypass 'no changes needed' when tier_threshold > 0
     content, ok1 = apply_patch1_bypass_no_changes(content, indent)

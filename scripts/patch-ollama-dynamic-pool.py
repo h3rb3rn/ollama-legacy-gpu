@@ -77,7 +77,11 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)
 		// This overrides the global OLLAMA_FLASH_ATTENTION=off setting.
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
+			// Force ALL model layers to GPU: bypass conservative compute-buffer fitting.
+			// Safe: model_size <= 75% of fast pool verified above.
+			os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
 	} else {
+		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
 		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs",
 			"model_gb", modelBytes/(1<<30),
 			"threshold_gb", thresholdBytes/(1<<30))
