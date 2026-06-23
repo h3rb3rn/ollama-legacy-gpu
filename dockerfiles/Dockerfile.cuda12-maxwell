@@ -48,6 +48,7 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
 COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
+COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
 
 WORKDIR /src
 RUN git clone --depth=1 \
@@ -104,6 +105,10 @@ RUN python3 /tmp/patch-ollama-fa.py /src
 #    Small models (fits in FAST_POOL_VRAM_GB): use fast GPUs only (FA=ON)
 #    Large models: use all GPUs (FA=OFF, full Tesla pool)
 RUN python3 /tmp/patch-ollama-dynamic-pool.py /src
+# 3. Batch size cap: OLLAMA_MAX_BATCH_SIZE limits numBatch/numUBatch.
+#    Reduces prefill compute buffer (batch × ctx × heads × 4 bytes) so Tesla
+#    GPUs can participate in multi-GPU inference without OOM.
+RUN python3 /tmp/patch-ollama-batch.py /src
 
 # Go binary
 RUN --mount=type=cache,target=/root/.cache/go-build \

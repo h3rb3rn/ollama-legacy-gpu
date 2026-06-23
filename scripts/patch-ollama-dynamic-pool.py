@@ -114,21 +114,34 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		//
 		//   Setting OLLAMA_GPU_TIER_THRESHOLD=0 disables our tier-filling patches
 		//   for this model load, letting the standard algorithm run unmodified.
-		// Reverse CUDA_VISIBLE_DEVICES for the full pool so the highest-VRAM GPU
-		// (RTX 3060, 12 GiB) is CUDA device 0. CUDA device 0 is the primary
-		// orchestrator and receives the large prefill compute buffer (~11 GiB for
-		// llama4:scout at 131k ctx); Tesla M10 (8 GiB) cannot hold this buffer.
+		// Full pool: all 12 GPUs, FA off (Tesla/GTX lack FA support).
+		// Use greedy fill (FORCE_GPU_LAYERS=999) with reduced batch size.
+		//
+		// Without Flash Attention the prefill compute buffer per GPU is:
+		//   batch_size × context × num_heads × 4 bytes
+		//   = 512 × 131072 × 32 × 4 ≈ 11.6 GiB  (at default batch=512)
+		// This exceeds Tesla M10 (8 GiB) and M60 (6.7 GiB available), making
+		// those GPUs unusable and forcing model layers to CPU.
+		//
+		// With batch=64: 64 × 131072 × 32 × 4 ≈ 1.07 GiB per GPU.
+		// Every GPU in the pool can hold this, so the greedy fill assigns layers
+		// to RTX3060 → RTX2060 → GTX1060 → M60 → M10, stopping as soon as all
+		// layers are placed (e.g. 9 GPUs for llama4:scout, not all 12).
+		//
+		// CUDA order (OLLAMA_CUDA_REVERSED = best→worst) puts RTX3060 first so
+		// it becomes CUDA0 (primary orchestrator) and holds the compute buffer;
+		// greedy fill still fills from the back (CUDA11 = worst M10 excluded
+		// last), i.e. fills RTX3060 layers first as expected.
 		if reversedDevices := os.Getenv("OLLAMA_CUDA_REVERSED"); reversedDevices != "" {
 			launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = reversedDevices
-			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs reversed (standard fitting, tier disabled)",
-				"model_gb", modelBytes/(1<<30),
-				"threshold_gb", thresholdBytes/(1<<30))
-		} else {
-			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (standard fitting, tier disabled)",
-				"model_gb", modelBytes/(1<<30),
-				"threshold_gb", thresholdBytes/(1<<30))
 		}
-		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
+		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs with capped batch (greedy fill)",
+			"model_gb", modelBytes/(1<<30),
+			"threshold_gb", thresholdBytes/(1<<30))
+		launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
+		launch.extraEnvs["OLLAMA_MAX_BATCH_SIZE"] = "64"
+		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
+		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "64")
 		os.Setenv("OLLAMA_GPU_TIER_THRESHOLD", "0")
 		// FA off: full pool includes Tesla/GTX which lack FA support
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "false")
