@@ -95,6 +95,8 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = fastDevices
 		launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
 		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
+		// Clear full-pool batch cap (FA makes compute buffers tiny, no cap needed).
+		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 	} else {
