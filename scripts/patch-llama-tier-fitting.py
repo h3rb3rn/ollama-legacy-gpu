@@ -98,13 +98,36 @@ FORCE_LAYERS_CODE = '''
             if (tensor_split) {{
                 for (size_t _id = 0; _id < nd; _id++) tensor_split[_id] = 0.0f;
             }}
+            // Bandwidth-weighted budgets: OLLAMA_GPU_BANDWIDTHS=83,83,...,360,360
+            // Parsed from gpu-detect.sh (worst→best order matches CUDA_VISIBLE_DEVICES).
+            // effective_budget[i] = raw_budget[i] * (max_bw / bw[i])
+            // Slow GPUs (M10: 83 GB/s) get 4.3× lower effective budget than their VRAM
+            // allows — they contribute fewer layers, avoiding pipeline bottlenecks.
+            float _bw_factors[64]; // max 64 GPUs
+            for (size_t _id = 0; _id < nd && _id < 64; _id++) _bw_factors[_id] = 1.0f;
+            if (const char * _bws_env = std::getenv("OLLAMA_GPU_BANDWIDTHS")) {{
+                const char * _max_env = std::getenv("OLLAMA_GPU_MAX_BANDWIDTH");
+                float _max_bw = _max_env ? std::stof(_max_env) : 360.0f;
+                std::string _bws_str(_bws_env);
+                size_t _bi = 0, _pos = 0;
+                while (_bi < nd && _bi < 64) {{
+                    size_t _comma = _bws_str.find(',', _pos);
+                    float _bw = std::stof(_bws_str.substr(_pos, _comma == std::string::npos ? std::string::npos : _comma - _pos));
+                    _bw_factors[_bi++] = (_bw > 0) ? (_max_bw / _bw) : 1.0f;
+                    if (_comma == std::string::npos) break;
+                    _pos = _comma + 1;
+                }}
+            }}
             // Greedy sequential fill: best GPU (highest CUDA index) first.
-            // Fills GPUs completely before moving to the next — minimum GPU count,
-            // maximum per-GPU utilization, lowest pipeline overhead.
+            // Budget scaled by bandwidth factor: slow GPUs (M10) get proportionally
+            // fewer layers to prevent pipeline bottlenecks in mixed-GPU inference.
             uint32_t _layers_left  = hp_ngl + 1;
             uint32_t _total_layers = 0;
             for (int _id = (int)nd - 1; _id >= 0 && _layers_left > 0; _id--) {{
-                int64_t _budget = dmds_full[_id].free - (int64_t)margins_s[_id];
+                int64_t _raw_budget = dmds_full[_id].free - (int64_t)margins_s[_id];
+                // Apply bandwidth scaling: divide by factor (factor>1 for slow GPUs)
+                int64_t _budget = (_raw_budget > 0) ?
+                    (int64_t)((float)_raw_budget / _bw_factors[_id]) : 0;
                 uint32_t _n = (_budget > 0) ?
                     std::min(_layers_left, (uint32_t)((float)_budget / _bytes_per_layer)) : 0;
                 if (tensor_split) tensor_split[_id] = (float)_n;

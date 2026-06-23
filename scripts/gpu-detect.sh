@@ -157,8 +157,13 @@ has_legacy = legacy_count > 0
 fa_enabled = 0 if has_legacy else 1
 kv_cache_type = "f16" if has_legacy else "q4_0"
 
-# GPU overhead: 256 MB per GPU
+# GPU overhead: baseline 256 MB, but exported as per-GPU bandwidth factor list.
+# OLLAMA_GPU_BANDWIDTHS is used by the tier-fitting patch to scale layer budgets:
+#   effective_budget[i] = (free[i] - margins[i]) * (max_bw / bw[i])
+# Slow GPUs (M10: 83 GB/s) get proportionally fewer layers than their VRAM allows,
+# preventing them from becoming pipeline bottlenecks.
 gpu_overhead = 268435456
+max_bw = max(g['bw_gbs'] for g in gpus) if gpus else 360
 
 # ── Write output ─────────────────────────────────────────────────────────────
 
@@ -196,12 +201,14 @@ lines += [
     f"OLLAMA_GPU_OVERHEAD={gpu_overhead}",
     f"OLLAMA_FAST_GPU_DEVICES={fast_pool_uuids}",
     f"OLLAMA_FAST_POOL_VRAM_GB={fast_pool_vram_gb}",
-    # Reversed order (best→worst) for full-pool large models:
-    # puts the highest-VRAM GPU (RTX 3060) as CUDA device 0.
-    # CUDA device 0 is the primary orchestrator and receives the large
-    # prefill compute buffer (~11 GiB for llama4:scout at 131k ctx).
-    # Tesla M10 (8 GiB) cannot hold this buffer; RTX 3060 (12 GiB) can.
+    # Reversed order (best→worst) for full-pool large models.
     f"OLLAMA_CUDA_REVERSED={','.join(g['uuid'] for g in reversed(gpus))}",
+    # Per-GPU bandwidth in GB/s (CUDA-order, comma-separated).
+    # Used by tier-fitting patch to scale layer budgets by bandwidth:
+    #   effective_budget = raw_budget * (max_bw / this_bw)
+    # Slower GPUs receive proportionally fewer layers to avoid pipeline bottlenecks.
+    f"OLLAMA_GPU_BANDWIDTHS={','.join(str(g['bw_gbs']) for g in gpus)}",
+    f"OLLAMA_GPU_MAX_BANDWIDTH={max_bw}",
 ]
 
 with open(output_file, 'w') as f:
