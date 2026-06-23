@@ -44,7 +44,7 @@ if [[ "$AUTODETECT" == "1" ]] && [[ -x "$DETECT_SCRIPT" ]]; then
             [[ -z "$key" || "$key" =~ ^# ]] && continue
             case "$key" in
                 CUDA_VISIBLE_DEVICES|OLLAMA_GPU_TIER_THRESHOLD|OLLAMA_GPU_OVERHEAD|\
-                OLLAMA_FAST_GPU_DEVICES|OLLAMA_FAST_POOL_VRAM_GB)
+                OLLAMA_FAST_GPU_DEVICES|OLLAMA_FAST_POOL_VRAM_GB|OLLAMA_CUDA_REVERSED)
                     export "$key"="$value"
                     ;;
                 OLLAMA_FLASH_ATTENTION|OLLAMA_KV_CACHE_TYPE)
