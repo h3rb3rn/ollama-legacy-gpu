@@ -130,20 +130,50 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// to RTX3060 → RTX2060 → GTX1060 → M60 → M10, stopping as soon as all
 		// layers are placed (e.g. 9 GPUs for llama4:scout, not all 12).
 		//
-		// Keep original CUDA order (worst→best: M10=CUDA0 … RTX3060=CUDA11).
-		// Greedy fill runs from CUDA11 (RTX3060, best bandwidth) down to CUDA0,
-		// so it fills RTX GPUs first and only extends to Tesla if needed.
-		// With batch=64 the primary orchestrator (CUDA0=M10, 8 GiB) holds only
-		// 1.07 GiB compute buffer — well within its VRAM budget.
-		// DO NOT reverse CUDA order: that would fill M10 first (wrong direction).
-		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs with capped batch (greedy fill)",
+		// Full pool: large model that exceeds fast-pool VRAM.
+		//
+		// Key constraint (from llama.cpp analysis, src/llama-context.cpp):
+		//   The gallocr compute buffer on CUDA0 (the primary orchestration device)
+		//   scales with n_ctx (context length), NOT with n_ubatch (batch size):
+		//     compute_buffer ≈ n_ctx × n_heads × head_dim × dtype_bytes × factor
+		//   At n_ctx=262144 (num_parallel=2 × 131072): ~11.6 GiB → OOM on M10 (8 GiB)
+		//   At n_ctx=131072 (num_parallel=1 × 131072): ~5.8 GiB → fits on RTX3060 (12 GiB)
+		//
+		// Strategy: CUDA_REVERSED + num_parallel=1
+		//   - CUDA_REVERSED: puts RTX3060 (12 GiB) as CUDA0 (primary orchestrator).
+		//     RTX3060 absorbs the 5.8 GiB compute buffer with 6.2 GiB to spare.
+		//   - num_parallel=1: halves n_ctx from 262144→131072, halving the compute buffer.
+		//   - Greedy fill: fills RTX3060 (CUDA11 in reversed order) first, extends
+		//     to M10 (CUDA0) only if needed. With RTX at CUDA11 and M10 at CUDA0,
+		//     greedy fills CUDA11→CUDA0, i.e. RTX first. ✓
+		//
+		//   NOTE: CUDA_REVERSED has RTX3060=CUDA0, M10=CUDA11. Greedy fills CUDA11→CUDA0:
+		//     CUDA11 = M10 (worst, filled LAST by greedy) ← greedy goes from 11 to 0
+		//     CUDA0  = RTX3060 (best, holds compute buffer, filled FIRST by greedy)
+		//   Wait — greedy fills CUDA(nd-1)=CUDA11 first. With REVERSED, CUDA11=M10 (worst).
+		//   This is WRONG — it would fill M10 first.
+		//
+		//   CORRECT approach: Keep ORIGINAL order (M10=CUDA0, RTX3060=CUDA11).
+		//   Greedy fills CUDA11 (RTX3060, best) first. CUDA0 (M10) is primary orchestrator.
+		//   With num_parallel=1: compute buffer ≈ 5.8 GiB. M10 (8 GiB) can hold it + model layers.
+		//   M10 has ~2 GiB budget for layers after 5.8 GiB compute → ~1-2 layers on M10.
+		//   RTX3060 (CUDA11, filled first by greedy): ~10 GiB budget → ~8 layers each.
+		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (num_parallel=1, greedy fill)",
 			"model_gb", modelBytes/(1<<30),
 			"threshold_gb", thresholdBytes/(1<<30))
 		launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
-		launch.extraEnvs["OLLAMA_MAX_BATCH_SIZE"] = "64"
 		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
-		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "64")
 		os.Setenv("OLLAMA_GPU_TIER_THRESHOLD", "0")
+		// Reduce compute buffer by halving effective n_ctx.
+		// Ollama sets n_ctx = OLLAMA_CONTEXT_LENGTH × OLLAMA_NUM_PARALLEL.
+		// Overriding num_parallel=1 here reduces context passed to llama-server
+		// from 262144 to 131072, halving the gallocr compute buffer.
+		// This is safe because selectGPUPool is called per model load.
+		if curNP := os.Getenv("OLLAMA_NUM_PARALLEL"); curNP != "1" {
+			os.Setenv("OLLAMA_NUM_PARALLEL", "1")
+			slog.Info("full pool: overriding OLLAMA_NUM_PARALLEL=1 to halve compute buffer",
+				"previous", curNP)
+		}
 		// FA off: full pool includes Tesla/GTX which lack FA support
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "false")
 	}
@@ -199,32 +229,40 @@ def patch(path: Path) -> bool:
     # compute buffer from 11.6 GiB (batch=512) to 1.07 GiB (batch=64), allowing
     # Tesla M10/M60 to participate in llama4:scout inference on all 12 GPUs.
     INLINE_BATCH_CAP = '''selectGPUPool(&launch)
-\t// [OLLAMA_MAX_BATCH_SIZE patch] Cap ONLY --ubatch-size / -ub in params.
+\t// [gallocr compute buffer reduction]
 \t//
-\t// From llama.cpp analysis (src/llama-context.cpp:205):
-\t//   n_ubatch (--ubatch-size) determines the compute buffer size.
-\t//   n_batch  (--batch-size)  is the logical batch, split into n_ubatch chunks.
-\t//   compute buffer = n_ubatch × ctx × n_heads × head_dim × 4 bytes per GPU
-\t//   At n_ubatch=512, ctx=131072, 32 heads: 8 GiB per attention layer → OOM on M10 (8 GiB)
-\t//   At n_ubatch=64:  64 × 131072 × 32 × 4 = 1.07 GiB → fits on all GPUs
+\t// From llama.cpp src/llama-context.cpp analysis:
+\t//   The gallocr compute buffer on the PRIMARY CUDA device (CUDA0) scales with n_ctx
+\t//   (total context length), NOT with n_ubatch. At n_ctx=262144 (num_parallel=2 × 131072,
+\t//   32 attention heads, F32 KQ scores): buffer ≈ 11.6 GiB.
+\t//   Tesla M10 has only 8 GiB → OOM. RTX3060 (12 GiB) has only 0.2 GiB margin → fragmentation.
 \t//
-\t// We cap only n_ubatch (not n_batch) so prefill efficiency is preserved:
-\t//   n_batch=512, n_ubatch=64: 512 logical tokens per step, chunked into 8 × 64-token passes
-\t//   n_batch=64,  n_ubatch=64: 64 logical tokens per step (8x more llama_decode calls)
+\t//   NOTE: -b/-ub are added AFTER appendFlashAttentionArgs, so they are NOT in params
+\t//   at this insertion point. We must modify -np and -c which ARE already in params here.
 \t//
-\t// selectGPUPool sets OLLAMA_MAX_BATCH_SIZE for the full pool path (Tesla present).
+\t// Fix: reduce n_ctx and num_parallel by halving -c and setting -np 1.
+\t//   -c 262144 → -c 131072: halves the KV cache and the gallocr compute buffer to ≈5.8 GiB
+\t//   -np 2 → -np 1: single parallel slot (KV cache matches per-slot context length)
+\t//   Tesla M10 (8 GiB) as CUDA0: 5.8 GiB compute + 0 model layers (greedy fills RTX first)
+\t//   → 2.2 GiB free on M10 ✓
+\t//
+\t// selectGPUPool sets OLLAMA_MAX_BATCH_SIZE for the full pool path.
 \tif _maxBatchStr := os.Getenv("OLLAMA_MAX_BATCH_SIZE"); _maxBatchStr != "" {
-\t\tif _maxBatch, _bErr := strconv.Atoi(_maxBatchStr); _bErr == nil && _maxBatch > 0 {
-\t\t\t// Only cap the physical micro-batch (--ubatch-size / -ub), not the logical batch
-\t\t\t_ubatchFlags := map[string]bool{"--ubatch-size": true, "-ub": true}
-\t\t\tfor _bi := 0; _bi < len(params)-1; _bi++ {
-\t\t\t\tif _ubatchFlags[params[_bi]] {
-\t\t\t\t\tif _cur, _e := strconv.Atoi(params[_bi+1]); _e == nil && _cur > _maxBatch {
-\t\t\t\t\t\tslog.Info("ubatch size capped for multi-GPU pool (reduces compute buffer)",
-\t\t\t\t\t\t\t"from", _cur, "to", _maxBatch,
-\t\t\t\t\t\t\t"compute_buffer_gb", float64(_maxBatch)*262144*32*4/(1<<30))
-\t\t\t\t\t\tparams[_bi+1] = strconv.Itoa(_maxBatch)
-\t\t\t\t\t}
+\t\tfor _pi := 0; _pi < len(params)-1; _pi++ {
+\t\t\tswitch params[_pi] {
+\t\t\tcase "-np", "--parallel":
+\t\t\t\tif _cur, _e := strconv.Atoi(params[_pi+1]); _e == nil && _cur > 1 {
+\t\t\t\t\tslog.Info("full pool: reducing num_parallel to halve gallocr compute buffer",
+\t\t\t\t\t\t"from", _cur, "to", 1)
+\t\t\t\t\tparams[_pi+1] = "1"
+\t\t\t\t}
+\t\t\tcase "-c", "--ctx-size":
+\t\t\t\tif _cur, _e := strconv.Atoi(params[_pi+1]); _e == nil && _cur > 131072 {
+\t\t\t\t\t_newCtx := _cur / 2
+\t\t\t\t\tslog.Info("full pool: halving -c to match num_parallel=1",
+\t\t\t\t\t\t"from", _cur, "to", _newCtx,
+\t\t\t\t\t\t"compute_buffer_halved_to_gib", float64(_newCtx)*32*4*32768/(1<<30))
+\t\t\t\t\tparams[_pi+1] = strconv.Itoa(_newCtx)
 \t\t\t\t}
 \t\t\t}
 \t\t}
