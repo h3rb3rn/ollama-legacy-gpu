@@ -99,15 +99,26 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 	} else {
 		// Model requires full GPU pool (Tesla present).
-		// Do NOT force greedy fill: Tesla GPUs (CC 5.0/5.2) lack Flash Attention, so
-		// the standard attention Q×K^T compute buffer is O(batch × seq_len) per GPU.
-		// Greedy fill overrides Ollama's conservative compute-buffer-aware fitting,
-		// causing OOM on Tesla M10/M60 (8 GB). Let Ollama's standard algorithm run —
-		// it accounts for compute buffers and may leave a few layers on CPU if needed.
-		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (standard fitting)",
+		// Do NOT force greedy fill AND disable tier-fitting patches.
+		//
+		// Why tier-patches must be disabled for full pool:
+		//   The tier-fitting patch (Patch 2) assigns layers to Tesla M10 in its
+		//   second pass when RTX doesn't hold all layers. Tesla M10 (8 GB) then
+		//   needs a ~12 GiB compute buffer for non-FA attention (Q×K^T at 131072+
+		//   context × batch=512) — exceeding its 8 GB → OOM at context init.
+		//
+		//   Standard Ollama fitting correctly computes the compute buffer estimate
+		//   per GPU in margins_s[]. If Tesla M10's compute budget is negative
+		//   (12 GB compute > 8 GB VRAM), it gets 0 layers and 0 compute allocation.
+		//   This is what makes standard Ollama work with llama4:scout on this hardware.
+		//
+		//   Setting OLLAMA_GPU_TIER_THRESHOLD=0 disables our tier-filling patches
+		//   for this model load, letting the standard algorithm run unmodified.
+		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (standard fitting, tier disabled)",
 			"model_gb", modelBytes/(1<<30),
 			"threshold_gb", thresholdBytes/(1<<30))
 		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
+		os.Setenv("OLLAMA_GPU_TIER_THRESHOLD", "0")
 		// FA off: full pool includes Tesla/GTX which lack FA support
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "false")
 	}
