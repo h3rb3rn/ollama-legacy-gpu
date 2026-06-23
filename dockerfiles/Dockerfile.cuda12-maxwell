@@ -25,6 +25,11 @@
 
 ARG CUDA12_VERSION=12.0.1
 ARG CMAKE_VERSION=3.31.7
+# Optional: use a custom llama.cpp fork instead of the version bundled with Ollama.
+# Set to "https://github.com/h3rb3rn/llama.cpp-legacy-gpu.git" to use our fork
+# with native greedy fill + bandwidth-weighted budgets (no Python patches needed).
+# Set to "" (empty) to use Ollama's bundled llama.cpp version (default).
+ARG LLAMA_CPP_FORK=""
 
 # ── Stage 1: Build toolchain ──────────────────────────────────────────────────
 FROM nvidia/cuda:${CUDA12_VERSION}-devel-ubuntu22.04 AS builder
@@ -63,15 +68,23 @@ RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
 # Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
-# Separated from build so the tier-fitting patch can be applied in between.
+# If LLAMA_CPP_FORK is set, override the bundled version with our fork.
+# Separated from build so patches can be applied in between.
 RUN cmake -S llama/server \
           --preset llama_cuda_v12_linux \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
-          -DGGML_CUDA_FA=OFF
+          -DGGML_CUDA_FA=OFF \
+    && if [ -n "${LLAMA_CPP_FORK}" ]; then \
+        echo "Using custom llama.cpp fork: ${LLAMA_CPP_FORK}"; \
+        LLAMA_SRC="build/llama-server-cuda_v12/_deps/llama_cpp-src"; \
+        rm -rf "$LLAMA_SRC"; \
+        git clone --depth=1 "${LLAMA_CPP_FORK}" "$LLAMA_SRC"; \
+        echo "Fork: $(git -C $LLAMA_SRC rev-parse --short HEAD)"; \
+    fi
 
-# Step 2: GPU-tier-fitting patch (Option 2)
-# Modifies common/fit.cpp to fill fast GPUs (CUDA >= OLLAMA_GPU_TIER_THRESHOLD) first.
-# Only fit.cpp is recompiled — everything else hits the ccache (fast rebuild).
+# Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.
+# When LLAMA_CPP_FORK is used, the fork already has these patches natively
+# so this step is a no-op (the patch guard prevents double-patching).
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
 
 # Step 3: cmake build + install
