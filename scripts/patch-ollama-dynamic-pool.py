@@ -147,34 +147,44 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		//     to M10 (CUDA0) only if needed. With RTX at CUDA11 and M10 at CUDA0,
 		//     greedy fills CUDA11→CUDA0, i.e. RTX first. ✓
 		//
-		//   NOTE: CUDA_REVERSED has RTX3060=CUDA0, M10=CUDA11. Greedy fills CUDA11→CUDA0:
-		//     CUDA11 = M10 (worst, filled LAST by greedy) ← greedy goes from 11 to 0
-		//     CUDA0  = RTX3060 (best, holds compute buffer, filled FIRST by greedy)
-		//   Wait — greedy fills CUDA(nd-1)=CUDA11 first. With REVERSED, CUDA11=M10 (worst).
-		//   This is WRONG — it would fill M10 first.
+		// Full pool: use RTX+GTX only (CC >= 6.1), excluding Tesla M10/M60.
 		//
-		//   CORRECT approach: Keep ORIGINAL order (M10=CUDA0, RTX3060=CUDA11).
-		//   Greedy fills CUDA11 (RTX3060, best) first. CUDA0 (M10) is primary orchestrator.
-		//   With num_parallel=1: compute buffer ≈ 5.8 GiB. M10 (8 GiB) can hold it + model layers.
-		//   M10 has ~2 GiB budget for layers after 5.8 GiB compute → ~1-2 layers on M10.
-		//   RTX3060 (CUDA11, filled first by greedy): ~10 GiB budget → ~8 layers each.
-		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (num_parallel=1, greedy fill)",
-			"model_gb", modelBytes/(1<<30),
-			"threshold_gb", thresholdBytes/(1<<30))
+		// The gallocr compute buffer on CUDA0 (primary orchestrator) scales with
+		// the number of GPUs in the pipeline, not just context length:
+		//   ~11.4 GiB with 12 GPUs (too large for M10/M60 as CUDA0, 8/7.4 GiB)
+		//   ~5.7 GiB with 6 GPUs  (fits on RTX3060 as CUDA0, 12 GiB)
+		//
+		// Solution: restrict to OLLAMA_NONLEGACY_REVERSED (RTX×5 + GTX×1 = 66 GiB).
+		//   - RTX3060 becomes CUDA0 (primary, holds 5.7 GiB compute buffer)
+		//   - RTX3060 as CUDA0 has 12 - 5.7 = 6.3 GiB for model layers
+		//   - Remaining GPUs (RTX2060, GTX) hold the bulk of the model
+		//   - Tesla excluded → no OOM, no pipeline bottleneck from 83 GB/s M10
+		//
+		// With 62 GiB llama4:scout on 66 GiB pool: ~4 layers on CPU = 8% CPU.
+		// This matches standard ollama/ollama:latest behavior (which also excludes Tesla).
+		//
+		// CUDA ordering for OLLAMA_NONLEGACY_REVERSED (best→worst within non-legacy):
+		//   CUDA0 = RTX3060 (primary, best, holds compute buffer)
+		//   CUDA5 = GTX1060 (worst non-legacy, filled last by greedy)
+		// Greedy fill: CUDA5 → CUDA4 → CUDA3 → CUDA2 → CUDA1 → CUDA0
+		//   = GTX → RTX2060×3 → RTX3060 (CUDA1) → RTX3060 (CUDA0, pure orchestrator)
+		//
+		nonlegacyDevices := os.Getenv("OLLAMA_NONLEGACY_REVERSED")
+		if nonlegacyDevices != "" {
+			launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = nonlegacyDevices
+			slog.Info("dynamic GPU pool: model exceeds fast pool, using RTX+GTX only (Tesla excluded, greedy fill)",
+				"model_gb", modelBytes/(1<<30),
+				"threshold_gb", thresholdBytes/(1<<30),
+				"pool_gb", os.Getenv("OLLAMA_NONLEGACY_VRAM_GB"))
+		} else {
+			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs",
+				"model_gb", modelBytes/(1<<30),
+				"threshold_gb", thresholdBytes/(1<<30))
+		}
 		launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
 		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
 		os.Setenv("OLLAMA_GPU_TIER_THRESHOLD", "0")
-		// Reduce compute buffer by halving effective n_ctx.
-		// Ollama sets n_ctx = OLLAMA_CONTEXT_LENGTH × OLLAMA_NUM_PARALLEL.
-		// Overriding num_parallel=1 here reduces context passed to llama-server
-		// from 262144 to 131072, halving the gallocr compute buffer.
-		// This is safe because selectGPUPool is called per model load.
-		if curNP := os.Getenv("OLLAMA_NUM_PARALLEL"); curNP != "1" {
-			os.Setenv("OLLAMA_NUM_PARALLEL", "1")
-			slog.Info("full pool: overriding OLLAMA_NUM_PARALLEL=1 to halve compute buffer",
-				"previous", curNP)
-		}
-		// FA off: full pool includes Tesla/GTX which lack FA support
+		// FA off: GTX1060 (CC 6.1) does not support Flash Attention
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "false")
 	}
 }

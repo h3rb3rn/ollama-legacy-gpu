@@ -209,6 +209,12 @@ lines += [
     # Slower GPUs receive proportionally fewer layers to avoid pipeline bottlenecks.
     f"OLLAMA_GPU_BANDWIDTHS={','.join(str(g['bw_gbs']) for g in gpus)}",
     f"OLLAMA_GPU_MAX_BANDWIDTH={max_bw}",
+    # Non-legacy GPUs (CC >= 6.1: GTX + RTX) in reversed order (best→worst).
+    # Used for the full pool when model exceeds the FA-capable fast pool:
+    # RTX3060 becomes CUDA0 (primary orchestrator), reducing the gallocr compute
+    # buffer from ~11.4 GiB (12 GPUs) to ~5.7 GiB (6 GPUs). Tesla excluded.
+    f"OLLAMA_NONLEGACY_REVERSED={','.join(g['uuid'] for g in reversed(gpus) if g['cc'] >= 61)}",
+    f"OLLAMA_NONLEGACY_VRAM_GB={int(sum(g['vram_bytes'] for g in gpus if g['cc'] >= 61) / 1e9)}",
 ]
 
 with open(output_file, 'w') as f:
