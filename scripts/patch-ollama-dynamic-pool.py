@@ -128,13 +128,12 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// to RTX3060 → RTX2060 → GTX1060 → M60 → M10, stopping as soon as all
 		// layers are placed (e.g. 9 GPUs for llama4:scout, not all 12).
 		//
-		// CUDA order (OLLAMA_CUDA_REVERSED = best→worst) puts RTX3060 first so
-		// it becomes CUDA0 (primary orchestrator) and holds the compute buffer;
-		// greedy fill still fills from the back (CUDA11 = worst M10 excluded
-		// last), i.e. fills RTX3060 layers first as expected.
-		if reversedDevices := os.Getenv("OLLAMA_CUDA_REVERSED"); reversedDevices != "" {
-			launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = reversedDevices
-		}
+		// Keep original CUDA order (worst→best: M10=CUDA0 … RTX3060=CUDA11).
+		// Greedy fill runs from CUDA11 (RTX3060, best bandwidth) down to CUDA0,
+		// so it fills RTX GPUs first and only extends to Tesla if needed.
+		// With batch=64 the primary orchestrator (CUDA0=M10, 8 GiB) holds only
+		// 1.07 GiB compute buffer — well within its VRAM budget.
+		// DO NOT reverse CUDA order: that would fill M10 first (wrong direction).
 		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs with capped batch (greedy fill)",
 			"model_gb", modelBytes/(1<<30),
 			"threshold_gb", thresholdBytes/(1<<30))
