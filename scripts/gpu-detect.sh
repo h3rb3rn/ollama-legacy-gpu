@@ -196,6 +196,12 @@ lines += [
     f"OLLAMA_GPU_OVERHEAD={gpu_overhead}",
     f"OLLAMA_FAST_GPU_DEVICES={fast_pool_uuids}",
     f"OLLAMA_FAST_POOL_VRAM_GB={fast_pool_vram_gb}",
+    # Reversed order (best→worst) for full-pool large models:
+    # puts the highest-VRAM GPU (RTX 3060) as CUDA device 0.
+    # CUDA device 0 is the primary orchestrator and receives the large
+    # prefill compute buffer (~11 GiB for llama4:scout at 131k ctx).
+    # Tesla M10 (8 GiB) cannot hold this buffer; RTX 3060 (12 GiB) can.
+    f"OLLAMA_CUDA_REVERSED={','.join(g['uuid'] for g in reversed(gpus))}",
 ]
 
 with open(output_file, 'w') as f:

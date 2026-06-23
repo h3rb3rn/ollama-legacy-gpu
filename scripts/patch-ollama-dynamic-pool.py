@@ -114,9 +114,20 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		//
 		//   Setting OLLAMA_GPU_TIER_THRESHOLD=0 disables our tier-filling patches
 		//   for this model load, letting the standard algorithm run unmodified.
-		slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (standard fitting, tier disabled)",
-			"model_gb", modelBytes/(1<<30),
-			"threshold_gb", thresholdBytes/(1<<30))
+		// Reverse CUDA_VISIBLE_DEVICES for the full pool so the highest-VRAM GPU
+		// (RTX 3060, 12 GiB) is CUDA device 0. CUDA device 0 is the primary
+		// orchestrator and receives the large prefill compute buffer (~11 GiB for
+		// llama4:scout at 131k ctx); Tesla M10 (8 GiB) cannot hold this buffer.
+		if reversedDevices := os.Getenv("OLLAMA_CUDA_REVERSED"); reversedDevices != "" {
+			launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = reversedDevices
+			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs reversed (standard fitting, tier disabled)",
+				"model_gb", modelBytes/(1<<30),
+				"threshold_gb", thresholdBytes/(1<<30))
+		} else {
+			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (standard fitting, tier disabled)",
+				"model_gb", modelBytes/(1<<30),
+				"threshold_gb", thresholdBytes/(1<<30))
+		}
 		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
 		os.Setenv("OLLAMA_GPU_TIER_THRESHOLD", "0")
 		// FA off: full pool includes Tesla/GTX which lack FA support
