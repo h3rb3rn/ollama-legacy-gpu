@@ -199,19 +199,30 @@ def patch(path: Path) -> bool:
     # compute buffer from 11.6 GiB (batch=512) to 1.07 GiB (batch=64), allowing
     # Tesla M10/M60 to participate in llama4:scout inference on all 12 GPUs.
     INLINE_BATCH_CAP = '''selectGPUPool(&launch)
-\t// [OLLAMA_MAX_BATCH_SIZE patch] Cap --batch-size / -b / --ubatch-size / -ub in params.
-\t// selectGPUPool sets OLLAMA_MAX_BATCH_SIZE for the full pool (Tesla present).
-\t// params is in scope here so we patch it directly after selectGPUPool runs.
-\t// Reduces per-GPU prefill compute buffer: 512×ctx×heads×4→64×ctx×heads×4.
+\t// [OLLAMA_MAX_BATCH_SIZE patch] Cap ONLY --ubatch-size / -ub in params.
+\t//
+\t// From llama.cpp analysis (src/llama-context.cpp:205):
+\t//   n_ubatch (--ubatch-size) determines the compute buffer size.
+\t//   n_batch  (--batch-size)  is the logical batch, split into n_ubatch chunks.
+\t//   compute buffer = n_ubatch × ctx × n_heads × head_dim × 4 bytes per GPU
+\t//   At n_ubatch=512, ctx=131072, 32 heads: 8 GiB per attention layer → OOM on M10 (8 GiB)
+\t//   At n_ubatch=64:  64 × 131072 × 32 × 4 = 1.07 GiB → fits on all GPUs
+\t//
+\t// We cap only n_ubatch (not n_batch) so prefill efficiency is preserved:
+\t//   n_batch=512, n_ubatch=64: 512 logical tokens per step, chunked into 8 × 64-token passes
+\t//   n_batch=64,  n_ubatch=64: 64 logical tokens per step (8x more llama_decode calls)
+\t//
+\t// selectGPUPool sets OLLAMA_MAX_BATCH_SIZE for the full pool path (Tesla present).
 \tif _maxBatchStr := os.Getenv("OLLAMA_MAX_BATCH_SIZE"); _maxBatchStr != "" {
 \t\tif _maxBatch, _bErr := strconv.Atoi(_maxBatchStr); _bErr == nil && _maxBatch > 0 {
-\t\t\t_batchFlags := map[string]bool{"--batch-size": true, "-b": true,
-\t\t\t\t"--ubatch-size": true, "-ub": true}
+\t\t\t// Only cap the physical micro-batch (--ubatch-size / -ub), not the logical batch
+\t\t\t_ubatchFlags := map[string]bool{"--ubatch-size": true, "-ub": true}
 \t\t\tfor _bi := 0; _bi < len(params)-1; _bi++ {
-\t\t\t\tif _batchFlags[params[_bi]] {
+\t\t\t\tif _ubatchFlags[params[_bi]] {
 \t\t\t\t\tif _cur, _e := strconv.Atoi(params[_bi+1]); _e == nil && _cur > _maxBatch {
-\t\t\t\t\t\tslog.Info("batch size capped for multi-GPU pool",
-\t\t\t\t\t\t\t"flag", params[_bi], "from", _cur, "to", _maxBatch)
+\t\t\t\t\t\tslog.Info("ubatch size capped for multi-GPU pool (reduces compute buffer)",
+\t\t\t\t\t\t\t"from", _cur, "to", _maxBatch,
+\t\t\t\t\t\t\t"compute_buffer_gb", float64(_maxBatch)*262144*32*4/(1<<30))
 \t\t\t\t\t\tparams[_bi+1] = strconv.Itoa(_maxBatch)
 \t\t\t\t\t}
 \t\t\t\t}
