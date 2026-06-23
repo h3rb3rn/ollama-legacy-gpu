@@ -191,11 +191,36 @@ def patch(path: Path) -> bool:
         print(f"  No change made", file=sys.stderr)
         return False
 
-    # Add the call to selectGPUPool before appendFlashAttentionArgs
+    # Add the call to selectGPUPool + inline batch cap before appendFlashAttentionArgs.
+    # params is in scope here; we search for --batch-size / --ubatch-size and
+    # replace values > OLLAMA_MAX_BATCH_SIZE. This reduces the per-GPU prefill
+    # compute buffer from 11.6 GiB (batch=512) to 1.07 GiB (batch=64), allowing
+    # Tesla M10/M60 to participate in llama4:scout inference on all 12 GPUs.
+    INLINE_BATCH_CAP = '''selectGPUPool(&launch)
+\t// [OLLAMA_MAX_BATCH_SIZE patch] Cap --batch-size / -b / --ubatch-size / -ub in params.
+\t// selectGPUPool sets OLLAMA_MAX_BATCH_SIZE for the full pool (Tesla present).
+\t// params is in scope here so we patch it directly after selectGPUPool runs.
+\t// Reduces per-GPU prefill compute buffer: 512×ctx×heads×4→64×ctx×heads×4.
+\tif _maxBatchStr := os.Getenv("OLLAMA_MAX_BATCH_SIZE"); _maxBatchStr != "" {
+\t\tif _maxBatch, _bErr := strconv.Atoi(_maxBatchStr); _bErr == nil && _maxBatch > 0 {
+\t\t\t_batchFlags := map[string]bool{"--batch-size": true, "-b": true,
+\t\t\t\t"--ubatch-size": true, "-ub": true}
+\t\t\tfor _bi := 0; _bi < len(params)-1; _bi++ {
+\t\t\t\tif _batchFlags[params[_bi]] {
+\t\t\t\t\tif _cur, _e := strconv.Atoi(params[_bi+1]); _e == nil && _cur > _maxBatch {
+\t\t\t\t\t\tslog.Info("batch size capped for multi-GPU pool",
+\t\t\t\t\t\t\t"flag", params[_bi], "from", _cur, "to", _maxBatch)
+\t\t\t\t\t\tparams[_bi+1] = strconv.Itoa(_maxBatch)
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+\t'''
     if "selectGPUPool(&launch)" not in new_content:
         new_content = new_content.replace(
             INSERT_BEFORE,
-            "selectGPUPool(&launch)\n\t" + INSERT_BEFORE,
+            INLINE_BATCH_CAP + INSERT_BEFORE,
             1
         )
 
