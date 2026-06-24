@@ -39,6 +39,9 @@ ARG OLLAMA_VERSION=main
 ARG CUDA_ARCHITECTURES="50-real;52-real;60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real"
 ARG JOBS=8
 ARG CMAKE_VERSION=3.31.7
+# Global ARGs defined before FROM must be re-declared inside each stage to be visible.
+ARG LLAMA_CPP_FORK=""
+ARG LLAMA_CPP_BRANCH="legacy-gpu-support"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_GENERATOR=Ninja
