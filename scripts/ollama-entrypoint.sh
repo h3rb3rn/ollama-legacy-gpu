@@ -30,6 +30,7 @@ CONFIG_FILE="/tmp/ollama-gpu-config.env"
 SCALE_OVERRIDE="/tmp/ollama-scale-override"
 LAYOUT_CACHE_DIR="/root/.ollama/layout-cache"
 mkdir -p "$LAYOUT_CACHE_DIR"
+# llama.cpp fork: legacy-gpu-support branch merged to master (partial fill fallback in fit.cpp)
 # Ollama serves internally on 11435; proxy on 11434 intercepts all requests
 OLLAMA_INTERNAL_PORT="${OLLAMA_INTERNAL_PORT:-11435}"
 OLLAMA_PROXY_PORT="${OLLAMA_PROXY_PORT:-11434}"
