@@ -110,18 +110,6 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		}
 	}
 
-	// Check persistent layout cache for a previously successful tensor-split.
-	// Cache key = model blob SHA prefix + GPU count (pool discriminator).
-	// Written by auto-optimize.py after measuring per-GPU VRAM delta post-load.
-	// On cache hit, OLLAMA_CACHED_TENSOR_SPLIT is set and injected as --tensor-split
-	// at the insertion point below, bypassing the llama.cpp fitting algorithm.
-	_cudaVis := os.Getenv("CUDA_VISIBLE_DEVICES")
-	if _split := _readLayoutCache(launch.modelPath, _cudaVis); _split != "" {
-		os.Setenv("OLLAMA_CACHED_TENSOR_SPLIT", _split)
-	}
-	// Write the cache key now so auto-optimize.py can locate the entry after load.
-	_writeLayoutKey(launch.modelPath, _cudaVis)
-
 	fastDevices := os.Getenv("OLLAMA_FAST_GPU_DEVICES")
 	fastPoolGB  := os.Getenv("OLLAMA_FAST_POOL_VRAM_GB")
 	if fastDevices == "" || fastPoolGB == "" {
@@ -161,6 +149,11 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
+		// Cache key uses the EFFECTIVE CUDA_VISIBLE_DEVICES (fast pool = RTX UUIDs).
+		if _split := _readLayoutCache(launch.modelPath, fastDevices); _split != "" {
+			os.Setenv("OLLAMA_CACHED_TENSOR_SPLIT", _split)
+		}
+		_writeLayoutKey(launch.modelPath, fastDevices)
 	} else {
 		// Model exceeds fast pool — use all 12 GPUs with FA=ON forced.
 		//
@@ -204,6 +197,12 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 		// Clear batch cap: FA keeps compute buffers tiny regardless of batch/context size.
 		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
+		// Cache key uses the EFFECTIVE CUDA_VISIBLE_DEVICES (full pool = all 12 GPUs).
+		_allVis := os.Getenv("CUDA_VISIBLE_DEVICES")
+		if _split := _readLayoutCache(launch.modelPath, _allVis); _split != "" {
+			os.Setenv("OLLAMA_CACHED_TENSOR_SPLIT", _split)
+		}
+		_writeLayoutKey(launch.modelPath, _allVis)
 	}
 }
 
