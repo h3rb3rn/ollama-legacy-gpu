@@ -82,8 +82,10 @@ RUN cmake -S llama/server \
         rm -rf "$LLAMA_SRC"; \
         git clone --depth=1 "${LLAMA_CPP_FORK}" "$LLAMA_SRC"; \
         echo "Fork: $(git -C $LLAMA_SRC rev-parse --short HEAD)"; \
-        STAMP_DIR="build/llama-server-cuda_v12/_deps/llama_cpp-subbuild/llama_cpp-populate-prefix/src/llama_cpp-populate-stamp"; \
-        touch "$STAMP_DIR/llama_cpp-populate-gitclone" "$STAMP_DIR/llama_cpp-populate-update" 2>/dev/null || true; \
+        cmake -S llama/server \
+              --preset llama_cuda_v12_linux \
+              -B build/llama-server-cuda_v12 \
+              -DFETCHCONTENT_UPDATES_DISCONNECTED=ON; \
     fi
 
 # Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.
