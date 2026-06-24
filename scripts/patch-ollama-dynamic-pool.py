@@ -10,9 +10,10 @@ Behavior:
     → Small models (≤60 GB): 50-60 tok/s on RTX pool
 
   If model file size > threshold OR env vars not set:
-    → Use all visible GPUs (no CUDA_VISIBLE_DEVICES override)
-    → Keep FA setting from environment (OFF when Tesla present)
-    → Large models (>60 GB): full 113 GB pool for llama4:scout etc.
+    → Use all 12 GPUs (no CUDA_VISIBLE_DEVICES override)
+    → Force FA=ON: RTX uses MMA kernel, Tesla/GTX use TILE kernel (no tensor cores)
+    → Greedy fill (FORCE_GPU_LAYERS=999): RTX fills first, Tesla last
+    → Large models (>60 GB): full 114 GB pool, no CPU fallback for llama4:scout
 
 Required env vars (set by gpu-detect.sh):
   OLLAMA_FAST_GPU_DEVICES     Comma-separated UUIDs of fast GPUs (CC >= 7.5)
@@ -100,96 +101,48 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 	} else {
-		// Model requires full GPU pool (Tesla present).
-		// Do NOT force greedy fill AND disable tier-fitting patches.
+		// Model exceeds fast pool — use all 12 GPUs with FA=ON forced.
 		//
-		// Why tier-patches must be disabled for full pool:
-		//   The tier-fitting patch (Patch 2) assigns layers to Tesla M10 in its
-		//   second pass when RTX doesn't hold all layers. Tesla M10 (8 GB) then
-		//   needs a ~12 GiB compute buffer for non-FA attention (Q×K^T at 131072+
-		//   context × batch=512) — exceeding its 8 GB → OOM at context init.
+		// Key finding from ggml-cuda/fattn.cu source analysis:
+		//   FA dispatch (ggml_cuda_get_best_fattn_kernel) returns BEST_FATTN_KERNEL_TILE
+		//   for GPUs without tensor cores (CC < 7.0), NOT BEST_FATTN_KERNEL_NONE.
+		//   TILE kernel is the generic FA path requiring only standard CUDA cores.
+		//   Compute buffer stays O(tile_size) = tiny (≈ 76–200 MiB) on ALL GPUs.
 		//
-		//   Standard Ollama fitting correctly computes the compute buffer estimate
-		//   per GPU in margins_s[]. If Tesla M10's compute budget is negative
-		//   (12 GB compute > 8 GB VRAM), it gets 0 layers and 0 compute allocation.
-		//   This is what makes standard Ollama work with llama4:scout on this hardware.
+		//   Device dispatch by compute capability:
+		//     Tesla M10 (CC 5.0) → BEST_FATTN_KERNEL_TILE (no tensor cores)
+		//     Tesla M60 (CC 5.2) → BEST_FATTN_KERNEL_TILE
+		//     GTX 1060  (CC 6.1) → BEST_FATTN_KERNEL_TILE
+		//     RTX 2060  (CC 7.5) → BEST_FATTN_KERNEL_MMA_F16 (Turing tensor cores)
+		//     RTX 3060  (CC 8.6) → BEST_FATTN_KERNEL_MMA_F16 (Ampere tensor cores)
 		//
-		//   Setting OLLAMA_GPU_TIER_THRESHOLD=0 disables our tier-filling patches
-		//   for this model load, letting the standard algorithm run unmodified.
-		// Full pool: all 12 GPUs, FA off (Tesla/GTX lack FA support).
-		// Use greedy fill (FORCE_GPU_LAYERS=999) with reduced batch size.
+		// All 12 GPUs (114 GB) with FA=ON eliminates CPU fallback for models up to
+		// ~110 GB. llama4:scout (63 GB) fits entirely in GPU VRAM with headroom.
 		//
-		// Without Flash Attention the prefill compute buffer per GPU is:
-		//   batch_size × context × num_heads × 4 bytes
-		//   = 512 × 131072 × 32 × 4 ≈ 11.6 GiB  (at default batch=512)
-		// This exceeds Tesla M10 (8 GiB) and M60 (6.7 GiB available), making
-		// those GPUs unusable and forcing model layers to CPU.
+		// CUDA ordering: parent CUDA_VISIBLE_DEVICES (worst-bandwidth → best).
+		//   CUDA0  = Tesla M10   (83 GB/s, 8 GB)
+		//   CUDA11 = RTX 3060   (360 GB/s, 12 GB)
+		// Greedy fill (FORCE_GPU_LAYERS=999) fills CUDA11→CUDA0 (best→worst):
+		//   RTX 3060 (2×12 GB = 24 GB) → RTX 2060 (3×12 GB = 36 GB) first,
+		//   extending to GTX/Tesla only when RTX is exhausted.
+		// Bandwidth weighting (patch-llama-tier-fitting.py) further limits Tesla
+		// layer budget (83 GB/s vs 360 GB/s = 4.3× fewer effective layers) to
+		// avoid pipeline bottlenecks.
 		//
-		// With batch=64: 64 × 131072 × 32 × 4 ≈ 1.07 GiB per GPU.
-		// Every GPU in the pool can hold this, so the greedy fill assigns layers
-		// to RTX3060 → RTX2060 → GTX1060 → M60 → M10, stopping as soon as all
-		// layers are placed (e.g. 9 GPUs for llama4:scout, not all 12).
-		//
-		// Full pool: large model that exceeds fast-pool VRAM.
-		//
-		// Key constraint (from llama.cpp analysis, src/llama-context.cpp):
-		//   The gallocr compute buffer on CUDA0 (the primary orchestration device)
-		//   scales with n_ctx (context length), NOT with n_ubatch (batch size):
-		//     compute_buffer ≈ n_ctx × n_heads × head_dim × dtype_bytes × factor
-		//   At n_ctx=262144 (num_parallel=2 × 131072): ~11.6 GiB → OOM on M10 (8 GiB)
-		//   At n_ctx=131072 (num_parallel=1 × 131072): ~5.8 GiB → fits on RTX3060 (12 GiB)
-		//
-		// Strategy: CUDA_REVERSED + num_parallel=1
-		//   - CUDA_REVERSED: puts RTX3060 (12 GiB) as CUDA0 (primary orchestrator).
-		//     RTX3060 absorbs the 5.8 GiB compute buffer with 6.2 GiB to spare.
-		//   - num_parallel=1: halves n_ctx from 262144→131072, halving the compute buffer.
-		//   - Greedy fill: fills RTX3060 (CUDA11 in reversed order) first, extends
-		//     to M10 (CUDA0) only if needed. With RTX at CUDA11 and M10 at CUDA0,
-		//     greedy fills CUDA11→CUDA0, i.e. RTX first. ✓
-		//
-		// Large model (> threshold): use RTX-only pool with Flash Attention.
-		//
-		// Key insight from memory breakdown analysis:
-		//   WITH Flash Attention:    compute buffer on CUDA0 =    76 MiB (tiny)
-		//   WITHOUT Flash Attention: compute buffer on CUDA0 = 11,444 MiB (huge)
-		//
-		// The PP (prompt processing) compute buffer scales with n_ctx × n_heads when
-		// attention scores must be materialized (standard attention). Flash Attention
-		// processes in tiles → O(1) memory → only 76 MiB compute buffer.
-		//
-		// Tesla M10/M60 (CC 5.0/5.2) and GTX 1060 (CC 6.1) do not support FA.
-		// Including them forces FA=OFF globally → 11.4 GiB compute buffer → OOM.
-		//
-		// Solution: restrict to OLLAMA_FAST_GPU_DEVICES (RTX only, CC ≥ 7.5).
-		//   - FA=ON → tiny compute buffers → no OOM on any RTX GPU (12 GiB)
-		//   - Standard Ollama fitting: manages CPU overflow when model > pool
-		//   - RTX pool (60 GiB) < llama4:scout (62 GiB): ~2 layers on CPU = 4% CPU
-		//   - Much better than standard ollama:latest (8% CPU) and than any
-		//     configuration that includes non-FA GPUs
-		//   - q4_0 KV cache enabled (FA required) → 4× smaller KV footprint
-		//
-		// CUDA ordering: OLLAMA_FAST_GPU_DEVICES (worst→best: RTX2060 → RTX3060).
-		// Greedy fill (NOT used here - let standard fitting handle CPU overflow):
-		//   Standard fitting puts 1-2 layers on CPU for llama4:scout,
-		//   computing KV cache and compute buffers correctly.
-		if fastDevices := os.Getenv("OLLAMA_FAST_GPU_DEVICES"); fastDevices != "" {
-			launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = fastDevices
-			slog.Info("dynamic GPU pool: model exceeds fast pool, using RTX-only (FA=ON, standard fitting)",
-				"model_gb", modelBytes/(1<<30),
-				"threshold_gb", thresholdBytes/(1<<30),
-				"pool_gb", os.Getenv("OLLAMA_FAST_POOL_VRAM_GB"),
-				"reason", "FA compute buffer 76 MiB vs 11.4 GiB without FA")
-		} else {
-			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (fallback)",
-				"model_gb", modelBytes/(1<<30))
-		}
-		// Disable greedy fill: let standard fitting manage CPU overflow gracefully.
-		// With FA enabled, the conservative fitting algorithm works well even for
-		// models slightly larger than the RTX pool.
-		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
+		// No CUDA_VISIBLE_DEVICES override: keep parent ordering (worst→best).
+		slog.Info("dynamic GPU pool: model exceeds fast pool, using all 12 GPUs (FA=ON, TILE kernel for CC<7.0)",
+			"model_gb", modelBytes/(1<<30),
+			"threshold_gb", thresholdBytes/(1<<30),
+			"fast_pool_gb", poolGB)
+		// Greedy fill: best GPU (RTX, highest CUDA index) fills first.
+		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
+		// Disable legacy tier patches: bandwidth weighting handles distribution.
 		os.Setenv("OLLAMA_GPU_TIER_THRESHOLD", "0")
-		// FA ON: all RTX GPUs (CC ≥ 7.5) support Flash Attention.
+		// FA=ON: TILE kernel available on all architectures ≥ CC 5.0.
+		// RTX uses MMA FA (fast), Tesla/GTX use TILE FA (slower but tiny compute buffer).
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
+		// Clear batch cap: FA keeps compute buffers tiny regardless of batch/context size.
+		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
 	}
 }
 
