@@ -86,7 +86,7 @@ func _readLayoutCache(modelPath, cudaVis string) string {
 
 func _writeLayoutKey(modelPath, cudaVis string) {
 	key := _layoutCacheKey(modelPath, cudaVis)
-	_ = os.WriteFile("/tmp/ollama-layout-key", []byte(key+"\n"), 0644)
+	_ = os.WriteFile("/tmp/ollama-layout-key", []byte(key+"\\n"), 0644)
 }
 
 // selectGPUPool dynamically restricts CUDA_VISIBLE_DEVICES to the fast GPU pool
