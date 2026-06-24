@@ -92,12 +92,24 @@ Model > threshold:
   → Result: RTX fills first, Tesla/GTX only for overflow capacity
 ```
 
-**Why pool selection matters:**
-A single Tesla M10 (CC 5.0) in the visible device set historically forces Flash Attention
-OFF globally in standard Ollama. Without FA, the prefill compute buffer scales with
-`n_ctx × n_heads` — at 131072 context: **11.4 GiB on the primary GPU alone**, exceeding
-even the RTX 3060's 12 GiB. Pool selection eliminates this by using only FA-capable
-GPUs for models that fit.
+**Why pool selection matters — and why this is per-model, not global:**
+
+In standard Ollama, a single Tesla M10 (CC 5.0) in `CUDA_VISIBLE_DEVICES` forces
+Flash Attention OFF for the entire server process — affecting all models, including
+those that would never touch a Tesla GPU. This is a global, permanent flag in upstream.
+
+This fork makes it **per-model and dynamic**:
+
+- Model fits in RTX pool → `CUDA_VISIBLE_DEVICES` restricted to RTX UUIDs → FA=ON (MMA kernel)
+- Model requires full pool → all 12 GPUs → FA=ON via TILE kernel for Maxwell/Pascal
+
+Whether FA is active depends entirely on **which GPUs the specific model actually uses**,
+not on which GPUs are installed. A server running both `qwen3.6:35b` (RTX pool, FA=MMA)
+and `llama4:scout` (full pool, FA=TILE) runs both with Flash Attention enabled
+simultaneously — each with the kernel appropriate for its assigned GPUs.
+
+The disabling of modern features like FA is **never permanent** in this fork; it is
+only an upstream limitation that this project removes through pool-aware routing.
 
 ### 2. Greedy Fill with Bandwidth Weighting
 
