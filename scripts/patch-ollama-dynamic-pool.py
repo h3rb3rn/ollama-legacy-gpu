@@ -197,6 +197,20 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 		// Clear batch cap: FA keeps compute buffers tiny regardless of batch/context size.
 		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
+		// Tighten overhead scale for full pool with FA=ON.
+		//
+		// Default scale=1.4 was calibrated for FA=OFF where the gallocr compute buffer
+		// is 11.4 GiB on the primary GPU. With FA=ON the compute buffer shrinks to
+		// ~278 MiB per GPU — the default 1.4× overhead makes greedy fill abort too
+		// early ("overhead=1.30x too tight") and fall back to VRAM-weighted distribution
+		// across all 12 GPUs, which spreads layers equally instead of filling RTX first.
+		//
+		// With scale=1.05 (5% headroom), greedy fill correctly packs RTX 3060 and
+		// RTX 2060 before extending to GTX/Tesla, using only as many GPUs as needed.
+		// Tesla M10 may receive 0 layers if the model fits in RTX+GTX capacity.
+		if cur := os.Getenv("OLLAMA_LAYER_OVERHEAD_SCALE"); cur == "" || cur == "1.4" || cur > "1.1" {
+			os.Setenv("OLLAMA_LAYER_OVERHEAD_SCALE", "1.05")
+		}
 		// Cache key uses the EFFECTIVE CUDA_VISIBLE_DEVICES (full pool = all 12 GPUs).
 		_allVis := os.Getenv("CUDA_VISIBLE_DEVICES")
 		if _split := _readLayoutCache(launch.modelPath, _allVis); _split != "" {
