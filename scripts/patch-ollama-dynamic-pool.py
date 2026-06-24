@@ -38,7 +38,56 @@ INSERT_BEFORE = "params = appendFlashAttentionArgs(params, launch.gpus)"
 
 POOL_SELECT_FUNC = '''
 // Imports needed by selectGPUPool (strings for TrimSpace on override file)
-// Note: "strings" and "os" are already imported in llama_server.go.
+// Note: "strings", "os", "strconv" are already imported in llama_server.go.
+
+// ── Layout cache helpers ──────────────────────────────────────────────────────
+// Persists the successful --tensor-split from a previous model load so the
+// llama.cpp fitting algorithm (common_params_fit_impl) can be bypassed on
+// subsequent loads of the same model on the same GPU pool.
+//
+// Cache key  : first 16 chars of model blob SHA + GPU count (pool discriminator).
+// Cache file : /root/.ollama/layout-cache/<key>.split  (persistent volume).
+// Cache value: ":"-separated integer proportions per CUDA device (0 = no layers).
+//              Written by auto-optimize.py after measuring per-GPU VRAM delta.
+// Lifetime   : no TTL — valid as long as the model blob exists in the pool.
+//              Invalidated automatically when CUDA_VISIBLE_DEVICES count changes
+//              (different pool) or model SHA changes (different model/quant).
+
+func _layoutCacheKey(modelPath, cudaVis string) string {
+	base := modelPath
+	if idx := strings.LastIndex(modelPath, "/"); idx >= 0 {
+		base = modelPath[idx+1:]
+	}
+	// Strip "sha256-" prefix to get the raw hash
+	if strings.HasPrefix(base, "sha256-") {
+		base = base[7:]
+	}
+	if len(base) > 16 {
+		base = base[:16]
+	}
+	// GPU count discriminates fast pool (5 RTX) from full pool (12 GPUs)
+	gpuCount := strings.Count(cudaVis, ",") + 1
+	return base + "-" + strconv.Itoa(gpuCount)
+}
+
+func _readLayoutCache(modelPath, cudaVis string) string {
+	key := _layoutCacheKey(modelPath, cudaVis)
+	data, err := os.ReadFile("/root/.ollama/layout-cache/" + key + ".split")
+	if err != nil {
+		return ""
+	}
+	split := strings.TrimSpace(string(data))
+	if split == "" || !strings.Contains(split, ":") {
+		return ""
+	}
+	slog.Info("layout cache hit: will inject --tensor-split", "key", key, "split", split)
+	return split
+}
+
+func _writeLayoutKey(modelPath, cudaVis string) {
+	key := _layoutCacheKey(modelPath, cudaVis)
+	_ = os.WriteFile("/tmp/ollama-layout-key", []byte(key+"\n"), 0644)
+}
 
 // selectGPUPool dynamically restricts CUDA_VISIBLE_DEVICES to the fast GPU pool
 // (OLLAMA_FAST_GPU_DEVICES) when the model file fits within the fast pool capacity.
@@ -60,6 +109,18 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 			os.Setenv("OLLAMA_LAYER_OVERHEAD_SCALE", scale)
 		}
 	}
+
+	// Check persistent layout cache for a previously successful tensor-split.
+	// Cache key = model blob SHA prefix + GPU count (pool discriminator).
+	// Written by auto-optimize.py after measuring per-GPU VRAM delta post-load.
+	// On cache hit, OLLAMA_CACHED_TENSOR_SPLIT is set and injected as --tensor-split
+	// at the insertion point below, bypassing the llama.cpp fitting algorithm.
+	_cudaVis := os.Getenv("CUDA_VISIBLE_DEVICES")
+	if _split := _readLayoutCache(launch.modelPath, _cudaVis); _split != "" {
+		os.Setenv("OLLAMA_CACHED_TENSOR_SPLIT", _split)
+	}
+	// Write the cache key now so auto-optimize.py can locate the entry after load.
+	_writeLayoutKey(launch.modelPath, _cudaVis)
 
 	fastDevices := os.Getenv("OLLAMA_FAST_GPU_DEVICES")
 	fastPoolGB  := os.Getenv("OLLAMA_FAST_POOL_VRAM_GB")
@@ -196,6 +257,12 @@ def patch(path: Path) -> bool:
     # compute buffer from 11.6 GiB (batch=512) to 1.07 GiB (batch=64), allowing
     # Tesla M10/M60 to participate in llama4:scout inference on all 12 GPUs.
     INLINE_BATCH_CAP = '''selectGPUPool(&launch)
+\t// [layout cache: inject cached --tensor-split to bypass llama.cpp fitting algorithm]
+\tif _ts := os.Getenv("OLLAMA_CACHED_TENSOR_SPLIT"); _ts != "" {
+\t\tparams = append(params, "--tensor-split", _ts)
+\t\tos.Unsetenv("OLLAMA_CACHED_TENSOR_SPLIT")
+\t\tslog.Info("layout cache: injecting cached --tensor-split", "split", _ts)
+\t}
 \t// [gallocr compute buffer reduction]
 \t//
 \t// From llama.cpp src/llama-context.cpp analysis:

@@ -87,6 +87,76 @@ def unload(model: str):
     time.sleep(3)
 
 
+LAYOUT_CACHE_DIR  = Path("/root/.ollama/layout-cache")
+VRAM_BEFORE_FILE  = Path("/tmp/vram-before-snapshot.json")
+LAYOUT_KEY_FILE   = Path("/tmp/ollama-layout-key")
+
+
+def get_per_gpu_vram_used() -> list[int]:
+    """Per-GPU used VRAM in bytes via NVML. Returns list indexed by device order."""
+    try:
+        import ctypes
+        for lib in ["libnvidia-ml.so.1", "/usr/local/nvidia/lib64/libnvidia-ml.so.1"]:
+            try:
+                nvml = ctypes.CDLL(lib)
+                break
+            except OSError:
+                continue
+        else:
+            return []
+        nvml.nvmlInit_v2()
+        count = ctypes.c_uint()
+        nvml.nvmlDeviceGetCount_v2(ctypes.byref(count))
+        class _Mem(ctypes.Structure):
+            _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong),
+                        ("used", ctypes.c_ulonglong)]
+        result = []
+        for i in range(count.value):
+            h = ctypes.c_void_p()
+            nvml.nvmlDeviceGetHandleByIndex_v2(i, ctypes.byref(h))
+            m = _Mem()
+            nvml.nvmlDeviceGetMemoryInfo(h, ctypes.byref(m))
+            result.append(int(m.used))
+        nvml.nvmlShutdown()
+        return result
+    except Exception:
+        return []
+
+
+def capture_layout_cache(model: str, sha: str) -> None:
+    """Measure per-GPU VRAM delta after model load and write tensor-split cache.
+
+    Called after the first successful generate() confirms the model is loaded.
+    Reads /tmp/vram-before-snapshot.json (written by proxy before load) and
+    /tmp/ollama-layout-key (written by selectGPUPool in Go) to build the cache.
+
+    Cache file: /root/.ollama/layout-cache/<key>.split
+    Content: ":"-separated integer VRAM proportions per GPU (e.g. "1160:1118:...")
+    Lifetime: persistent (no TTL); invalidated when GPU count or model SHA changes.
+    """
+    try:
+        if not VRAM_BEFORE_FILE.exists() or not LAYOUT_KEY_FILE.exists():
+            return
+        vram_before = json.loads(VRAM_BEFORE_FILE.read_text())
+        vram_after  = get_per_gpu_vram_used()
+        cache_key   = LAYOUT_KEY_FILE.read_text().strip()
+        if not vram_before or not vram_after or len(vram_before) != len(vram_after):
+            return
+        delta = [max(0, vram_after[i] - vram_before[i]) for i in range(len(vram_after))]
+        total = sum(delta)
+        if total < 500_000_000:  # < 500 MB delta = model was already loaded, skip
+            return
+        # Normalize to integer proportions (GPU with 0 allocation stays 0)
+        split = ":".join(str(int(d * 1000 // total)) for d in delta)
+        LAYOUT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (LAYOUT_CACHE_DIR / f"{cache_key}.split").write_text(split)
+        active = sum(1 for d in delta if d > 0)
+        print(f"[layout-cache] saved: model={sha[:8]} key={cache_key} gpus={active} split={split[:40]}...")
+        VRAM_BEFORE_FILE.unlink(missing_ok=True)
+    except Exception as e:
+        print(f"[layout-cache] capture failed: {e}", file=sys.stderr)
+
+
 def get_free_vram_bytes() -> int:
     """Sum of free VRAM across all visible GPUs via NVML."""
     try:
@@ -427,10 +497,16 @@ def main():
         if cached.get("draft_num_predict", 0) > 0:
             hint = f"# HINT: set draft_num_predict={cached['draft_num_predict']} in request for {model}"
             Path("/tmp/model-configs/hints.txt").write_text(hint + "\n")
+        # Capture layout cache if not yet done (model loads after apply_cached triggers reload).
+        # Wait briefly for the model to fully load before measuring VRAM delta.
+        time.sleep(30)
+        capture_layout_cache(model, sha)
         return
 
-    # Run optimization
+    # Run optimization — capture layout after the first successful generate.
     optimize(model)
+    # Model is now loaded with optimal settings; capture per-GPU VRAM layout.
+    capture_layout_cache(model, sha)
 
 
 if __name__ == "__main__":

@@ -46,8 +46,9 @@ from pathlib import Path
 BACKEND_URL     = os.environ.get("OLLAMA_BACKEND_URL", "http://localhost:11435")
 LISTEN_PORT     = int(os.environ.get("OLLAMA_PROXY_PORT", "11434"))
 OPTIMIZE_SCRIPT = "/usr/local/bin/auto-optimize.py"
-CACHE_DIR       = Path("/root/.ollama/auto-optimize")
-SCALE_OVERRIDE  = Path("/tmp/ollama-scale-override")
+CACHE_DIR         = Path("/root/.ollama/auto-optimize")
+SCALE_OVERRIDE    = Path("/tmp/ollama-scale-override")
+VRAM_BEFORE_FILE  = Path("/tmp/vram-before-snapshot.json")
 OPTIMIZE_LOCK        = {}  # model → threading.Event (prevent duplicate runs per model)
 OPTIMIZE_LOCK_MUTEX  = threading.Lock()
 GLOBAL_OPT_SEMAPHORE = threading.Semaphore(1)  # only one optimizer runs at a time
@@ -59,6 +60,60 @@ logging.basicConfig(level=logging.INFO,
                     format="[proxy] %(asctime)s %(message)s",
                     datefmt="%H:%M:%S")
 log = logging.getLogger("proxy")
+
+
+def _get_per_gpu_vram_used() -> list:
+    """Per-GPU used VRAM in bytes via NVML (same pattern as auto-optimize.py)."""
+    try:
+        import ctypes
+        for lib in ["libnvidia-ml.so.1", "/usr/local/nvidia/lib64/libnvidia-ml.so.1"]:
+            try:
+                nvml = ctypes.CDLL(lib)
+                break
+            except OSError:
+                continue
+        else:
+            return []
+        nvml.nvmlInit_v2()
+        count = ctypes.c_uint()
+        nvml.nvmlDeviceGetCount_v2(ctypes.byref(count))
+        class _Mem(ctypes.Structure):
+            _fields_ = [("total", ctypes.c_ulonglong), ("free", ctypes.c_ulonglong),
+                        ("used", ctypes.c_ulonglong)]
+        result = []
+        for i in range(count.value):
+            h = ctypes.c_void_p()
+            nvml.nvmlDeviceGetHandleByIndex_v2(i, ctypes.byref(h))
+            m = _Mem()
+            nvml.nvmlDeviceGetMemoryInfo(h, ctypes.byref(m))
+            result.append(int(m.used))
+        nvml.nvmlShutdown()
+        return result
+    except Exception:
+        return []
+
+
+def _snap_vram_before_load(model: str) -> None:
+    """Take per-GPU VRAM snapshot before a new model loads.
+
+    Called when we detect a request for a model not currently loaded.
+    auto-optimize.py reads this snapshot after load to compute the delta
+    and derive the --tensor-split proportions for the layout cache.
+    """
+    try:
+        # Check if model is already loaded (no snapshot needed)
+        req = urllib.request.Request(f"{BACKEND_URL}/api/ps", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+            loaded = [m.get("name", "") for m in data.get("models", [])]
+            if any(model in n or n.startswith(model) for n in loaded):
+                return  # already loaded, no need for before-snapshot
+    except Exception:
+        pass
+    vram = _get_per_gpu_vram_used()
+    if vram:
+        VRAM_BEFORE_FILE.write_text(json.dumps(vram))
+        log.debug(f"vram-before snapshot: {sum(vram)//1024//1024//1024}GB used across {len(vram)} GPUs")
 
 
 def get_model_sha(model: str) -> str:
@@ -212,6 +267,10 @@ def maybe_optimize_model(model: str | None) -> str:
             return ""
         if apply_cached_config(sha):
             return sha  # cached, applied
+        # New model — take VRAM snapshot before load for layout cache capture.
+        # Runs in a background thread to avoid blocking the request path.
+        threading.Thread(target=_snap_vram_before_load, args=(model,),
+                         daemon=True, name=f"vram-snap-{sha[:8]}").start()
         # No cache: trigger background optimization (non-blocking)
         with OPTIMIZE_LOCK_MUTEX:
             if sha not in OPTIMIZE_LOCK:
