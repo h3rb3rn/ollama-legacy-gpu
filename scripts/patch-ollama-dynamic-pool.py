@@ -147,45 +147,49 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		//     to M10 (CUDA0) only if needed. With RTX at CUDA11 and M10 at CUDA0,
 		//     greedy fills CUDA11→CUDA0, i.e. RTX first. ✓
 		//
-		// Full pool: use RTX+GTX only (CC >= 6.1), excluding Tesla M10/M60.
+		// Large model (> threshold): use RTX-only pool with Flash Attention.
 		//
-		// The gallocr compute buffer on CUDA0 (primary orchestrator) scales with
-		// the number of GPUs in the pipeline, not just context length:
-		//   ~11.4 GiB with 12 GPUs (too large for M10/M60 as CUDA0, 8/7.4 GiB)
-		//   ~5.7 GiB with 6 GPUs  (fits on RTX3060 as CUDA0, 12 GiB)
+		// Key insight from memory breakdown analysis:
+		//   WITH Flash Attention:    compute buffer on CUDA0 =    76 MiB (tiny)
+		//   WITHOUT Flash Attention: compute buffer on CUDA0 = 11,444 MiB (huge)
 		//
-		// Solution: restrict to OLLAMA_NONLEGACY_REVERSED (RTX×5 + GTX×1 = 66 GiB).
-		//   - RTX3060 becomes CUDA0 (primary, holds 5.7 GiB compute buffer)
-		//   - RTX3060 as CUDA0 has 12 - 5.7 = 6.3 GiB for model layers
-		//   - Remaining GPUs (RTX2060, GTX) hold the bulk of the model
-		//   - Tesla excluded → no OOM, no pipeline bottleneck from 83 GB/s M10
+		// The PP (prompt processing) compute buffer scales with n_ctx × n_heads when
+		// attention scores must be materialized (standard attention). Flash Attention
+		// processes in tiles → O(1) memory → only 76 MiB compute buffer.
 		//
-		// With 62 GiB llama4:scout on 66 GiB pool: ~4 layers on CPU = 8% CPU.
-		// This matches standard ollama/ollama:latest behavior (which also excludes Tesla).
+		// Tesla M10/M60 (CC 5.0/5.2) and GTX 1060 (CC 6.1) do not support FA.
+		// Including them forces FA=OFF globally → 11.4 GiB compute buffer → OOM.
 		//
-		// CUDA ordering for OLLAMA_NONLEGACY_REVERSED (best→worst within non-legacy):
-		//   CUDA0 = RTX3060 (primary, best, holds compute buffer)
-		//   CUDA5 = GTX1060 (worst non-legacy, filled last by greedy)
-		// Greedy fill: CUDA5 → CUDA4 → CUDA3 → CUDA2 → CUDA1 → CUDA0
-		//   = GTX → RTX2060×3 → RTX3060 (CUDA1) → RTX3060 (CUDA0, pure orchestrator)
+		// Solution: restrict to OLLAMA_FAST_GPU_DEVICES (RTX only, CC ≥ 7.5).
+		//   - FA=ON → tiny compute buffers → no OOM on any RTX GPU (12 GiB)
+		//   - Standard Ollama fitting: manages CPU overflow when model > pool
+		//   - RTX pool (60 GiB) < llama4:scout (62 GiB): ~2 layers on CPU = 4% CPU
+		//   - Much better than standard ollama:latest (8% CPU) and than any
+		//     configuration that includes non-FA GPUs
+		//   - q4_0 KV cache enabled (FA required) → 4× smaller KV footprint
 		//
-		nonlegacyDevices := os.Getenv("OLLAMA_NONLEGACY_REVERSED")
-		if nonlegacyDevices != "" {
-			launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = nonlegacyDevices
-			slog.Info("dynamic GPU pool: model exceeds fast pool, using RTX+GTX only (Tesla excluded, greedy fill)",
+		// CUDA ordering: OLLAMA_FAST_GPU_DEVICES (worst→best: RTX2060 → RTX3060).
+		// Greedy fill (NOT used here - let standard fitting handle CPU overflow):
+		//   Standard fitting puts 1-2 layers on CPU for llama4:scout,
+		//   computing KV cache and compute buffers correctly.
+		if fastDevices := os.Getenv("OLLAMA_FAST_GPU_DEVICES"); fastDevices != "" {
+			launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = fastDevices
+			slog.Info("dynamic GPU pool: model exceeds fast pool, using RTX-only (FA=ON, standard fitting)",
 				"model_gb", modelBytes/(1<<30),
 				"threshold_gb", thresholdBytes/(1<<30),
-				"pool_gb", os.Getenv("OLLAMA_NONLEGACY_VRAM_GB"))
+				"pool_gb", os.Getenv("OLLAMA_FAST_POOL_VRAM_GB"),
+				"reason", "FA compute buffer 76 MiB vs 11.4 GiB without FA")
 		} else {
-			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs",
-				"model_gb", modelBytes/(1<<30),
-				"threshold_gb", thresholdBytes/(1<<30))
+			slog.Info("dynamic GPU pool: model exceeds fast pool, using all GPUs (fallback)",
+				"model_gb", modelBytes/(1<<30))
 		}
-		launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
-		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
+		// Disable greedy fill: let standard fitting manage CPU overflow gracefully.
+		// With FA enabled, the conservative fitting algorithm works well even for
+		// models slightly larger than the RTX pool.
+		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "0")
 		os.Setenv("OLLAMA_GPU_TIER_THRESHOLD", "0")
-		// FA off: GTX1060 (CC 6.1) does not support Flash Attention
-		os.Setenv("OLLAMA_FLASH_ATTENTION", "false")
+		// FA ON: all RTX GPUs (CC ≥ 7.5) support Flash Attention.
+		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 	}
 }
 
