@@ -10,17 +10,37 @@ A fork of [Ollama](https://github.com/ollama/ollama) — the Go runtime and Dock
 
 ## Why this fork exists
 
-Standard `ollama/ollama:latest` targets modern CUDA architectures (CC ≥ 6.0 with practical support for CC ≥ 7.5). **Tesla M10 (CC 5.0) and M60 (CC 5.2)** are Maxwell-generation GPUs released in 2015 — still fully functional, but excluded from official CUDA toolkit distributions starting with CUDA 12.
+Standard `ollama/ollama:latest` targets modern CUDA architectures and drops support for **Tesla M10 (CC 5.0) and M60 (CC 5.2)** — Maxwell-generation data-center GPUs still holding 54 GiB of useful VRAM on N04-RTX. Beyond driver support, upstream Ollama also distributes model layers equally across all GPUs, ignoring their vastly different memory bandwidths (83 GB/s for M10 vs 360 GB/s for RTX 3060).
 
-This project solves a real hardware problem: running state-of-the-art LLMs on a mixed GPU server during a hardware supply shortage, where legacy data-center GPUs (Tesla M10/M60) are combined with consumer RTX cards — all in a single Ollama instance sharing the full ~114 GiB VRAM pool.
+This fork solves three interconnected problems:
 
-This fork enables:
-1. **Single Ollama instance across all 12 GPU endpoints** (~114 GiB VRAM)
-2. **Dynamic GPU pool selection** per model: fast RTX pool for small models, full 12-GPU pool for large models
-3. **Greedy layer fill** instead of equal distribution — RTX cards get filled first, Tesla only used as overflow
-4. **Bandwidth-weighted budgets** — slow Tesla GPUs receive proportionally fewer layers to prevent pipeline bottlenecks
-5. **Tier-aware Flash Attention** — FA enabled when the model uses only RTX GPUs (CC ≥ 7.5)
-6. **Auto-optimization proxy** — background optimizer finds optimal settings per model and caches them
+1. **Maxwell GPU support** under CUDA 12 (CC 5.0/5.2 excluded from official CUDA 12)
+2. **Bandwidth-aware layer distribution** — potent GPUs fill first; slow GPUs only used as overflow
+3. **Per-model GPU pool selection** — fewer GPUs when the model fits; full pool only when needed
+
+---
+
+## Core optimization principle: fill fast GPUs first, use only what you need
+
+The central insight driving all optimizations in this fork:
+
+> **Pipeline throughput is bounded by the slowest GPU. Fewer GPUs in the pipeline means fewer synchronization points and a faster bottleneck.**
+
+On N04-RTX, memory bandwidth spans a 4.3× range:
+
+| GPU class | Bandwidth | Available VRAM |
+|-----------|-----------|----------------|
+| RTX 3060 (×2) | 360 GB/s | 24 GiB |
+| RTX 2060 12GB (×3) | 336 GB/s | 36 GiB |
+| GTX 1060 6GB | 192 GB/s | 6 GiB |
+| Tesla M60 (×2) | 160 GB/s | ~15 GiB |
+| Tesla M10 (×4) | 83 GB/s | 32 GiB |
+
+If you spread `qwen3.6:35b` (22 GiB) across all 12 GPUs, each gets ~1.8 GiB — including four Tesla M10s at 83 GB/s. Every decode step then synchronizes across all 12 GPUs and waits for the slowest one. Measured result: ~4 tok/s.
+
+With greedy fill (RTX only, 4 GPUs): **24.3 tok/s with speculative decoding** — a 6× improvement on the same hardware.
+
+The principle: **assign layers greedily to the fastest GPUs, stop when all layers are placed.**
 
 ---
 
@@ -29,25 +49,23 @@ This fork enables:
 **Host system:**
 - CPU: AMD EPYC 3151 4-Core Processor
 - RAM: 128 GiB DDR4 ECC
-- OS: Ubuntu 22.04.5 LTS (kernel 5.15.0-181)
-- CUDA driver: 12.0.1 (no NVLink — all GPUs communicate over PCIe)
+- OS: Ubuntu 22.04.5 LTS
+- CUDA driver: 12.0.1 (no NVLink — all inter-GPU communication over PCIe)
 
 **GPU topology (CUDA order, worst → best bandwidth):**
 
-| CUDA idx | GPU | Architecture | CC | VRAM | Bandwidth | PCIe ID |
-|----------|-----|-------------|-----|------|-----------|---------|
-| 0–3 | Tesla M10 (4 GPU dies) | Maxwell | 5.0 | 8 GiB each | 83 GB/s | 13–16:00.0 |
-| 4–5 | Tesla M60 (2 GPU dies) | Maxwell | 5.2 | ~7.7 GiB each | 160 GB/s | 0d–0e:00.0 |
-| 6 | GeForce GTX 1060 6GB | Pascal | 6.1 | 6 GiB | 192 GB/s | 17:00.0 |
-| 7–9 | GeForce RTX 2060 12GB (×3) | Turing | 7.5 | 12 GiB each | 336 GB/s | 07,0a,0f:00.0 |
-| 10 | GeForce RTX 3060 LHR | Ampere | 8.6 | 12 GiB | 360 GB/s | 08:00.0 |
-| 11 | GeForce RTX 3060 | Ampere | 8.6 | 12 GiB | 360 GB/s | 09:00.0 |
+| CUDA | GPU | Arch | CC | VRAM | Bandwidth |
+|------|-----|------|----|------|-----------|
+| 0–3 | Tesla M10 (×4) | Maxwell | 5.0 | 8 GiB each | 83 GB/s |
+| 4–5 | Tesla M60 (×2) | Maxwell | 5.2 | ~7.7 GiB each | 160 GB/s |
+| 6 | GTX 1060 6GB | Pascal | 6.1 | 6 GiB | 192 GB/s |
+| 7–9 | RTX 2060 12GB (×3) | Turing | 7.5 | 12 GiB each | 336 GB/s |
+| 10–11 | RTX 3060 (×2) | Ampere | 8.6 | 12 GiB each | 360 GB/s |
 
-**Total VRAM: ~114 GiB across 12 GPU dies on a single PCIe host.**
+**Total: ~114 GiB across 12 GPU dies on a single PCIe host.**
 
-The CUDA ordering (worst → best) is critical: our greedy fill starts from CUDA 11
-(RTX 3060, 360 GB/s) and works backward, filling each GPU completely before extending
-to slower GPUs. Tesla M10 only receives layers if RTX + GTX cannot hold the model.
+CUDA ordering (worst → best) is intentional: the greedy fill algorithm fills from
+CUDA 11 (RTX 3060) downward, exhausting fast GPUs before touching slow ones.
 
 ---
 
@@ -57,129 +75,155 @@ to slower GPUs. Tesla M10 only receives layers if RTX + GTX cannot hold the mode
 
 **File:** `scripts/patch-ollama-dynamic-pool.py` → patches `llm/llama_server.go`
 
-Adds `selectGPUPool(*llamaServerLaunchConfig)` called on every model load:
+On every model load, `selectGPUPool()` checks the model file size against the RTX-only
+pool capacity and routes accordingly:
 
 ```
-Model file size ≤ 75% of RTX fast pool (64 GiB):
-  → CUDA_VISIBLE_DEVICES = 5 RTX UUIDs only
-  → OLLAMA_FORCE_GPU_LAYERS=999 (greedy fill, see below)
-  → Flash Attention ON (all RTX ≥ CC 7.5)
-  → Example: qwen3.6:35b (22 GiB) → 4 RTX GPUs, ~24.3 tok/s with MTP
+Model ≤ 75% of RTX fast pool (~48 GiB threshold):
+  → CUDA_VISIBLE_DEVICES = 5 RTX GPUs only (64 GiB)
+  → Greedy fill: fills RTX 3060 → RTX 2060, stops when done
+  → Flash Attention ON (CC ≥ 7.5, MMA kernel)
+  → Result: 3–4 GPUs used, Tesla untouched, maximum tok/s
 
-Model file size > threshold:
-  → All 12 GPUs (114 GiB full pool)
-  → Standard Ollama fitting (compute-buffer-aware, prevents OOM on M10)
-  → Flash Attention OFF (Tesla cannot run FA kernels)
-  → Example: llama4:scout (62 GiB) → RTX + GTX + M60 + M10 as needed
+Model > threshold:
+  → CUDA_VISIBLE_DEVICES = all 12 GPUs (114 GiB)
+  → Greedy fill with bandwidth weighting (see below)
+  → Flash Attention ON — TILE kernel handles Maxwell/Pascal (see section 4)
+  → Result: RTX fills first, Tesla/GTX only for overflow capacity
 ```
 
-**Why this matters:** Without pool selection, Tesla GPUs are always visible to Ollama's
-Flash Attention check. One CC 5.0 GPU disables FA globally — even for a model that
-could run entirely on RTX. This unnecessarily increases KV cache size by 4× (f16
-instead of q4_0) and reduces throughput.
+**Why pool selection matters:**
+A single Tesla M10 (CC 5.0) in the visible device set historically forces Flash Attention
+OFF globally in standard Ollama. Without FA, the prefill compute buffer scales with
+`n_ctx × n_heads` — at 131072 context: **11.4 GiB on the primary GPU alone**, exceeding
+even the RTX 3060's 12 GiB. Pool selection eliminates this by using only FA-capable
+GPUs for models that fit.
 
 ### 2. Greedy Fill with Bandwidth Weighting
 
 **File:** `scripts/patch-llama-tier-fitting.py` → patches `common/fit.cpp`  
-**Native C++ version:** `h3rb3rn/llama.cpp-legacy-gpu` (see below)
+**Native C++ version:** `h3rb3rn/llama.cpp-legacy-gpu` (branch `legacy-gpu-support`)
 
-Standard llama.cpp distributes layers across GPUs proportionally to VRAM. For a
-22 GiB model across 12 GPUs, each GPU gets ~1.8 GiB of layers — including Tesla M10
-(83 GB/s). The decode pipeline then waits at the slowest GPU: throughput collapses.
+Standard llama.cpp distributes layers across all visible GPUs proportionally to their
+VRAM. For a 22 GiB model across 12 GPUs, every GPU including Tesla M10 gets the same
+share. Decode throughput collapses to the M10's 83 GB/s bottleneck.
 
-Our greedy fill with bandwidth weighting:
+**Greedy fill algorithm:**
+
 ```
-for each GPU (best → worst bandwidth, CUDA 11 → 0):
-    effective_budget = (free_vram - margins) / bandwidth_factor
-    bandwidth_factor = max_bw / this_gpu_bw  (M10: 360/83 = 4.3×)
+For each GPU sorted by bandwidth (best → worst, CUDA 11 → 0):
+    effective_budget = (free_vram − margins) × (this_bw / max_bw)
     n_layers = effective_budget / bytes_per_layer
-    assign n_layers; stop when all layers placed
+    assign layers; reduce remaining
+    stop if all layers placed
+
+If greedy cannot place all layers (tight overhead):
+    fall back to VRAM-weighted distribution across all GPUs
+    (proportional to free_vram − margins, not equal shares)
 ```
 
-**Impact on N04-RTX:**
-- `qwen3.6:35b` (22 GiB, 42 layers): 3–4 RTX GPUs used, Tesla untouched
-- `llama4:scout` (62 GiB, 49 layers): RTX → GTX → M60 → M10 in order, only as needed
+The bandwidth factor is critical: Tesla M10 (83 GB/s) gets an effective budget of
+`8 GiB / 4.3 = 1.9 GiB`, while RTX 3060 (360 GB/s) gets its full 12 GiB.
+This prevents assigning many layers to a GPU that would become a pipeline bottleneck.
 
-Fewer GPUs in the pipeline = fewer PCIe synchronization points = higher tok/s.
+**Results on N04-RTX:**
 
-### 3. VRAM-Weighted Fallback (replaces equal distribution)
+| Model | Layers | GPUs actually used | Unused GPUs | tok/s |
+|-------|--------|-------------------|-------------|-------|
+| qwen3.6:35b (22 GiB) | 42 | 3–4 RTX | 8 Tesla/GTX/RTX | ~24.3 |
+| llama4:scout (62 GiB) | 49 | all 12 | none | ~1 |
 
-When greedy fill cannot place all layers (scale too tight), the original equal
-distribution (`tensor_split = [1, 1, 1, ...]`) caused OOM on Tesla M10 for large
-models. CUDA 0 (M10) as the primary orchestration device needs a large compute buffer
-for attention (scales with `n_ctx × n_heads × 4 bytes`). Equal distribution assigned
-Tesla M10 as many layers as RTX 3060 despite having 8 GiB vs 12 GiB and 4× lower
-bandwidth.
+For qwen: **8 GPUs stay idle** because RTX cards can hold the entire model. For
+llama4:scout: all 12 are needed because the model exceeds the RTX pool (60 GiB).
 
-**Fix:** VRAM-weighted fallback — each GPU's share proportional to
-`(free_vram - margins) / total_budget`. Tesla M10 gets 1-2 layers; RTX 3060 gets 8.
+### 3. Flash Attention on All Architectures (including Maxwell)
 
-### 4. Tier-Aware Flash Attention
+**Discovery:** `ggml-cuda/fattn.cu` in llama.cpp dispatches FA kernels by compute
+capability at runtime:
 
-**File:** `scripts/patch-ollama-fa.py` → patches `LlamaServerFlashAttention()` in Go
+| CC | GPU class | FA kernel used | Compute buffer |
+|----|-----------|---------------|----------------|
+| ≥ 8.6 | RTX 3060 | `MMA_F16` (Ampere tensor cores) | ~76 MiB |
+| ≥ 7.5 | RTX 2060 | `MMA_F16` (Turing tensor cores) | ~76 MiB |
+| ≥ 7.0 | Volta | `WMMA_F16` | ~76 MiB |
+| ≥ 5.0 | Tesla M10/M60, GTX 1060 | **`TILE`** (generic CUDA cores) | ~76 MiB |
 
-When `OLLAMA_GPU_TIER_THRESHOLD > 0`, FA is checked only against the fast GPU tier
-(`gpus[threshold:]` = RTX GPUs). A Tesla M10 in the visible device list no longer
-forces global FA=OFF.
+The `TILE` kernel requires no tensor cores — it is the generic FA fallback that runs
+on any CUDA architecture ≥ CC 5.0. `BEST_FATTN_KERNEL_NONE` (abort) is never returned
+for CC ≥ 5.0 in our build.
 
-**Impact:** Fast-pool models (small enough for RTX only) get FA=ON → q4_0 KV cache
-→ 4× smaller KV footprint → more context fits in RTX VRAM.
+**Impact:** Flash Attention ON across all 12 GPUs including Tesla M10. The primary GPU's
+compute buffer drops from **11,444 MiB → 76 MiB**, enabling large models at 131K+
+context without OOM on any GPU in the pool.
+
+### 4. Native CUBIN Targets (No PTX JIT)
+
+Standard builds use `-virtual` CUDA targets for older architectures, causing JIT
+compilation of PTX bytecode on first model load. With 12 GPUs and PTX for CC 5.0:
+cold-start delay of 20–30 minutes.
+
+This build compiles native CUBIN for every target:
+```
+50-real;52-real;60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real
+```
+
+Kernels load instantly on all 12 GPUs from the first request.
 
 ### 5. Auto-Optimization Proxy
 
 **Files:** `scripts/ollama-proxy.py`, `scripts/auto-optimize.py`
 
-A transparent HTTP proxy on port 11434 (Ollama internally on 11435) that:
+A transparent HTTP proxy (port 11434 → Ollama on 11435) that:
 
-1. Detects each new model on first request
-2. Spawns a background optimizer testing `OVERHEAD_SCALE` ∈ [1.0, 1.1, 1.2, 1.4, 1.6, 2.0]
-   and MTP draft tokens [0, 2, 4] at each scale
-3. Caches the globally optimal `(scale, draft)` combination in `/root/.ollama/auto-optimize/`
-4. Applies cached settings on all subsequent loads
+1. Intercepts the first request to any model
+2. Launches a background optimizer testing:
+   - `OVERHEAD_SCALE` ∈ [1.0, 1.1, 1.2, 1.4, 1.6, 2.0]
+   - MTP speculative decoding draft tokens [0, 2, 4] at each scale
+3. Caches the globally optimal `(scale, draft)` pair in `/root/.ollama/auto-optimize/`
+4. Applies cached settings on every subsequent load
 
-**Key insight:** The optimizer tests MTP at ALL scale values, not just the best
-no-MTP scale. This is important because with more GPUs (higher scale), each GPU has
-fewer layers and shorter per-pass time, which can make speculative decoding more or
-less effective.
+The optimizer tests MTP at all scale values because GPU count affects speculative
+decoding efficiency: with 4 GPUs (scale=1.6) each GPU has fewer layers per pass,
+making draft tokens worth the overhead. With 3 GPUs (scale=1.1), they degrade throughput.
 
-**Benchmark results on N04-RTX for `qwen3.6:35b` Q4_K_M:**
+**Proxy connection timeout:** 1800s to accommodate large model load times (llama4:scout
+requires ~8 minutes to transfer 62 GiB across 12 GPUs). Shorter timeouts cause the
+scheduler to cancel loading and retry indefinitely.
 
-| Scale | GPUs | tok/s (no draft) | tok/s (draft=2) |
-|-------|------|-----------------|-----------------|
-| 1.1 | 3 RTX | 18.0 | worse |
-| 1.6 | 4 RTX | 16.2 | **24.3** ← optimal |
+### 6. Persistent Layout Cache
 
-MTP improves throughput at scale=1.6 (4 GPUs) but degrades it at scale=1.1 (3 GPUs)
-because the draft overhead outweighs the benefit when each GPU has many layers.
+**Files:** `scripts/patch-ollama-dynamic-pool.py`, `scripts/auto-optimize.py`, `scripts/ollama-proxy.py`
 
-### 6. Native CUBIN Targets (No PTX JIT)
+After a successful model load, `auto-optimize.py` measures per-GPU VRAM delta via NVML
+and derives the `--tensor-split` proportions used by llama.cpp. These are written to
+`/root/.ollama/layout-cache/<model_sha>-<gpu_count>.split` (persistent volume).
 
-Standard builds use `-virtual` CUDA targets for older architectures, causing
-per-GPU JIT compilation on first model load. With 12 GPUs and PTX for CC 5.0:
-startup delay of 20-30 minutes on cold start.
-
-This build uses `-real` for all architectures:
-```
-50-real;52-real;60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real
-```
-
-Native CUBIN embedded → instant kernel loading on all 12 GPUs.
+On the next restart, `selectGPUPool()` reads the cache and injects `--tensor-split`
+directly, bypassing the `common_params_fit_impl` estimation loop (20–30 iterations
+visible in logs). Cache key encodes model SHA and GPU count so fast-pool and full-pool
+layouts are stored separately.
 
 ---
 
 ## Model Performance on N04-RTX
 
-| Model | Weights | Pool | GPUs | CPU/GPU | tok/s |
-|-------|---------|------|------|---------|-------|
-| qwen3.6:35b Q4_K_M | 22 GiB | RTX fast (5 RTX) | 4/12 | ~7%/93% | ~24.3 |
-| llama4:scout Q4_K_M | 62 GiB | Full 12-GPU | 10-11/12 | ~8%/92% | ~2-5 |
+| Model | Size | Pool | GPUs used | Flash Attn | tok/s |
+|-------|------|------|-----------|------------|-------|
+| qwen3.6:35b Q4_K_M | 22 GiB | RTX fast (5 avail.) | **3–4 RTX** | MMA (CC 7.5+) | **~24.3** (with MTP draft=2, scale=1.6) |
+| llama4:scout Q4_K_M | 62 GiB | Full 12-GPU | **all 12** | MMA + TILE | **~1** |
 
-*The ~7% CPU share reflects the model-level embedding layer (architecturally on CPU in
-llama.cpp for MoE models) and PCIe graph coordination overhead — not actual layer
-compute on CPU.*
+**Why llama4:scout is slow (~1 tok/s) even with all 12 GPUs on GPU:**
+llama4:scout uses a Mixture-of-Experts (MoE) architecture: 16 expert FFN blocks per
+layer with only 1 active per token. The active expert's weights can reside on any GPU,
+requiring PCIe transfers between GPUs on every decode step. Without NVLink (which
+provides 600 GB/s vs PCIe's ~32 GB/s per lane), each MoE decode step crosses the PCIe
+bus 49 times (once per layer). This is a fundamental hardware constraint — not a
+software problem. llama4:scout is designed for systems with NVLink or single GPUs
+with ≥ 80 GiB VRAM (A100/H100).
 
-*NVLink would eliminate the PCIe synchronization overhead and likely double throughput,
-but is not available on this consumer/prosumer hardware mix.*
+**qwen3.6:35b** is a dense transformer (no MoE) and benefits fully from the greedy
+fill approach: all active layers reside on high-bandwidth RTX GPUs with no slow-GPU
+bottleneck.
 
 ---
 
@@ -188,7 +232,8 @@ but is not available on this consumer/prosumer hardware mix.*
 ```bash
 # On N04-RTX: pull and start
 cd /opt/deployment/ollama/fork/compose
-./update.sh
+docker compose -f docker-compose.worker-rtx.yml pull
+docker compose -f docker-compose.worker-rtx.yml up -d
 
 # Or build from source
 docker build \
@@ -198,6 +243,16 @@ docker build \
   -t ghcr.io/h3rb3rn/ollama-legacy:cuda12-maxwell-latest .
 ```
 
+**Environment variables (set automatically by `gpu-detect.sh` via NVML):**
+
+| Variable | Purpose |
+|----------|---------|
+| `CUDA_VISIBLE_DEVICES` | GPU order: worst→best bandwidth (greedy fill direction) |
+| `OLLAMA_FAST_GPU_DEVICES` | RTX-only UUIDs for fast pool |
+| `OLLAMA_FAST_POOL_VRAM_GB` | Total RTX VRAM (threshold for pool selection) |
+| `OLLAMA_GPU_TIER_THRESHOLD` | CUDA index split: legacy vs fast GPUs |
+| `OLLAMA_GPU_BANDWIDTHS` | Per-GPU bandwidth in GB/s (for layer budget weighting) |
+
 ---
 
 ## Related Projects
@@ -205,7 +260,6 @@ docker build \
 - **Upstream Ollama**: https://github.com/ollama/ollama (MIT)
 - **llama.cpp fork**: https://github.com/h3rb3rn/llama.cpp-legacy-gpu (MIT)
 - **Upstream llama.cpp**: https://github.com/ggml-org/llama.cpp (MIT)
-- **Inspiration** — DwarfStar's chunked-prefill approach: https://github.com/antirez/dwarfstar
 
 ---
 
@@ -213,6 +267,6 @@ docker build \
 
 MIT License — same as upstream Ollama and llama.cpp.
 
-Modifications in this repository are Copyright (c) 2025-2026 Philipp Horn.  
-Original Ollama code is Copyright (c) Ollama contributors.  
+Modifications Copyright (c) 2025–2026 Philipp Horn.  
+Original Ollama code Copyright (c) Ollama contributors.  
 See [LICENSE](LICENSE) for the full MIT license text.
