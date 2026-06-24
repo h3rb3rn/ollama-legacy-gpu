@@ -80,8 +80,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-${{ needs.resolve-version.outputs.short }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-latest
-          cache-from: type=gha,scope=cuda12-maxwell
-          cache-to:   type=gha,scope=cuda12-maxwell,mode=max
+          cache-from: type=gha,scope=cuda12-maxwell-v2
+          cache-to:   type=gha,scope=cuda12-maxwell-v2,mode=max
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 12, CC 5.0/5.2 (Tesla M10/M60)
