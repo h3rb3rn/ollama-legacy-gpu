@@ -30,6 +30,7 @@ ARG CMAKE_VERSION=3.31.7
 # with native greedy fill + bandwidth-weighted budgets (no Python patches needed).
 # Set to "" (empty) to use Ollama's bundled llama.cpp version (default).
 ARG LLAMA_CPP_FORK=""
+ARG LLAMA_CPP_BRANCH="legacy-gpu-support"
 
 # ── Stage 1: Build toolchain ──────────────────────────────────────────────────
 FROM nvidia/cuda:${CUDA12_VERSION}-devel-ubuntu22.04 AS builder
@@ -78,7 +79,7 @@ RUN cmake -S llama/server \
         echo "Using custom llama.cpp fork: ${LLAMA_CPP_FORK}"; \
         LLAMA_SRC="build/llama-server-cuda_v12/_deps/llama_cpp-src"; \
         rm -rf "$LLAMA_SRC"; \
-        git clone --depth=1 "${LLAMA_CPP_FORK}" "$LLAMA_SRC"; \
+        git clone --depth=1 --branch "${LLAMA_CPP_BRANCH}" "${LLAMA_CPP_FORK}" "$LLAMA_SRC"; \
         echo "Fork: $(git -C $LLAMA_SRC rev-parse --short HEAD)"; \
     fi
 
