@@ -257,8 +257,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     body = inject_optimal_options(body, sha)
 
         # Forward to backend
+        # Use longer timeout for inference/generate paths: large models (llama4:scout 62 GB)
+        # can take >8 minutes to load before the first token arrives. The Ollama scheduler
+        # propagates a canceled HTTP connection as "context canceled", killing llama-server.
+        # Match OLLAMA_LOAD_TIMEOUT (20 min) so the scheduler's own timeout fires first.
+        _backend_timeout = 1800 if self.path in INFERENCE_PATHS else 60
         try:
-            conn = http.client.HTTPConnection(host, port, timeout=600)
+            conn = http.client.HTTPConnection(host, port, timeout=_backend_timeout)
             # Forward headers, skip hop-by-hop
             skip_headers = {"host", "connection", "transfer-encoding",
                             "keep-alive", "proxy-connection", "te", "trailers",
