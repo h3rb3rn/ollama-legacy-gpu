@@ -144,18 +144,28 @@ FORCE_LAYERS_CODE = '''
             // Now: RTX 3060 keeps 9 layers + tiny raw-VRAM overflow share → ~10 GB used
             if (_total_layers < (uint32_t)(hp_ngl + 1)) {{
                 uint32_t _overflow = (uint32_t)(hp_ngl + 1) - _total_layers;
-                float _total_raw = 0.0f;
+                // Distribute overflow proportional to REMAINING bandwidth-weighted budget.
+                // After greedy, fast GPUs (RTX) have exhausted their budget; slow GPUs
+                // (Tesla/GTX) still have budget left. This sends overflow to slow GPUs
+                // that have headroom, preventing RTX from being packed beyond safe KV limits.
+                float _total_remaining = 0.0f;
                 for (size_t _id = 0; _id < nd; _id++) {{
-                    float _b = (float)(dmds_full[_id].free) - (float)margins_s[_id];
-                    if (_b > 0) _total_raw += _b;
+                    float _raw = (float)(dmds_full[_id].free) - (float)margins_s[_id];
+                    float _bw_budget = (_raw > 0) ? (_raw / _bw_factors[_id]) : 0;
+                    float _used = tensor_split ? (tensor_split[_id] * _bytes_per_layer) : 0;
+                    float _remaining = _bw_budget - _used;
+                    if (_remaining > 0) _total_remaining += _remaining;
                 }}
                 LOG_WRN("%s: greedy fill placed only %d/%d layers (overhead=%.2fx too tight); "
-                        "distributing %d overflow layer(s) by raw VRAM across %zu GPU(s)\\n",
+                        "distributing %d overflow layer(s) by remaining BW budget across %zu GPU(s)\\n",
                         __func__, _total_layers, hp_ngl + 1, _ovhd, _overflow, nd);
-                if (nd > 1 && tensor_split && _total_raw > 0) {{
+                if (nd > 1 && tensor_split && _total_remaining > 0) {{
                     for (size_t _id = 0; _id < nd; _id++) {{
-                        float _b = (float)(dmds_full[_id].free) - (float)margins_s[_id];
-                        if (_b > 0) tensor_split[_id] += (_b / _total_raw) * (float)_overflow;
+                        float _raw = (float)(dmds_full[_id].free) - (float)margins_s[_id];
+                        float _bw_budget = (_raw > 0) ? (_raw / _bw_factors[_id]) : 0;
+                        float _used = tensor_split ? (tensor_split[_id] * _bytes_per_layer) : 0;
+                        float _remaining = _bw_budget - _used;
+                        if (_remaining > 0) tensor_split[_id] += (_remaining / _total_remaining) * (float)_overflow;
                     }}
                     mparams->tensor_split = tensor_split;
                 }}
