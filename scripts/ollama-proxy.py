@@ -112,7 +112,8 @@ def _snap_vram_before_load(model: str) -> None:
         pass
     vram = _get_per_gpu_vram_used()
     if vram:
-        VRAM_BEFORE_FILE.write_text(json.dumps(vram))
+        # H11: include timestamp to detect stale snapshots in capture_layout_cache()
+        VRAM_BEFORE_FILE.write_text(json.dumps({"ts": time.time(), "vram": vram}))
         log.debug(f"vram-before snapshot: {sum(vram)//1024//1024//1024}GB used across {len(vram)} GPUs")
 
 

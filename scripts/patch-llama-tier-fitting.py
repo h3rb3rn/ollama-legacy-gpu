@@ -33,7 +33,7 @@ import re
 import subprocess
 from pathlib import Path
 
-PATCH_GUARD    = "OLLAMA_GPU_TIER_THRESHOLD"
+PATCH_GUARD    = "OLLAMA_GPU_TIER_THRESHOLD_v2"
 LOOP_MARKER    = "for (int id = nd - 1; id >= 0; id--) {"
 DENSE_LOG        = 'filling dense layers back-to-front:'
 NO_CHANGES_STR   = 'targets for free memory can be met on all devices, no changes needed'

@@ -31,7 +31,7 @@ import sys
 import re
 from pathlib import Path
 
-PATCH_GUARD   = "OLLAMA_FAST_POOL_VRAM_GB"
+PATCH_GUARD   = "OLLAMA_FAST_POOL_VRAM_GB_v2"
 TARGET_FILE   = "llm/llama_server.go"
 INSERT_BEFORE = "params = appendFlashAttentionArgs(params, launch.gpus)"
 
@@ -161,6 +161,9 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
+		// H2: q4_0 KV cache for fast pool — FA=ON (MMA kernel) supports quantised KV,
+		// 4× smaller than f16 → enables np=2 with generous headroom on RTX.
+		os.Setenv("OLLAMA_KV_CACHE_TYPE", "q4_0")
 		// Cache key uses the EFFECTIVE CUDA_VISIBLE_DEVICES (fast pool = RTX UUIDs).
 		if _split := _readLayoutCache(launch.modelPath, fastDevices); _split != "" {
 			os.Setenv("OLLAMA_CACHED_TENSOR_SPLIT", _split)
@@ -207,6 +210,14 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// FA=ON: TILE kernel available on all architectures ≥ CC 5.0.
 		// RTX uses MMA FA (fast), Tesla/GTX use TILE FA (slower but tiny compute buffer).
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
+		// H2: f16 KV for full pool — TILE-kernel on Tesla has constraints with q4_0.
+		os.Setenv("OLLAMA_KV_CACHE_TYPE", "f16")
+		// H3: row split = tensor parallelism (all GPUs compute each layer simultaneously).
+		// Replaces layer split (sequential pipeline with M10 as bottleneck).
+		// Configurable via OLLAMA_SPLIT_MODE env override in .env.
+		if os.Getenv("OLLAMA_SPLIT_MODE") == "" {
+			os.Setenv("OLLAMA_SPLIT_MODE", "row")
+		}
 		// Enable batch cap to reduce -np 2→1, halving the KV-cache per GPU.
 		// With partial fill, RTX 3060 gets ~9.8 GiB model; KV at np=2 needs 2 GiB
 		// on CUDA10 (leaving only 0.4 GiB margin → OOM). np=1 halves KV to ~1 GiB.
@@ -288,6 +299,14 @@ def patch(path: Path) -> bool:
     # compute buffer from 11.6 GiB (batch=512) to 1.07 GiB (batch=64), allowing
     # Tesla M10/M60 to participate in llama4:scout inference on all 12 GPUs.
     INLINE_BATCH_CAP = '''selectGPUPool(&launch)
+\t// [H3: split-mode injection — row for full pool (tensor parallelism), layer for fast pool]
+\tif _sm := os.Getenv("OLLAMA_SPLIT_MODE"); _sm != "" {
+\t\tparams = append(params, "--split-mode", _sm)
+\t\tslog.Info("GPU split mode", "mode", _sm)
+\t\tos.Unsetenv("OLLAMA_SPLIT_MODE")
+\t}
+\t// [H7: continuous batching — mix tokens from concurrent requests in same GPU batch]
+\tparams = append(params, "--cont-batching")
 \t// [main-gpu: set pipeline coordinator to best GPU (highest CUDA index = best bandwidth)]
 \t// Default main-gpu=0 = Tesla M10 (83 GB/s) on N04-RTX → pipeline bottleneck.
 \t// RTX 3060 (CUDA nd-1, 360 GB/s) as coordinator: 4.3× faster inter-GPU transfers,
@@ -337,6 +356,21 @@ def patch(path: Path) -> bool:
 \t\t\t\t\t\t"from", _cur, "to", _newCtx,
 \t\t\t\t\t\t"compute_buffer_halved_to_gib", float64(_newCtx)*32*4*32768/(1<<30))
 \t\t\t\t\tparams[_pi+1] = strconv.Itoa(_newCtx)
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t\t// H6: hard cap context for full pool — prevents 78 GB CUDA_Host CPU buffer on
+\t\t// hybrid architectures (recurrent state × long context explodes CPU allocation).
+\t\tif _maxCtxStr := os.Getenv("OLLAMA_MAX_CTX_FULL_POOL"); _maxCtxStr != "" {
+\t\t\tif _limit, _le := strconv.Atoi(_maxCtxStr); _le == nil && _limit > 0 {
+\t\t\t\tfor _pi := 0; _pi < len(params)-1; _pi++ {
+\t\t\t\t\tif params[_pi] == "-c" || params[_pi] == "--ctx-size" {
+\t\t\t\t\t\tif _cur, _ce := strconv.Atoi(params[_pi+1]); _ce == nil && _cur > _limit {
+\t\t\t\t\t\t\tslog.Info("full pool: capping context to prevent CPU buffer explosion",
+\t\t\t\t\t\t\t\t"from", _cur, "to", _limit)
+\t\t\t\t\t\t\tparams[_pi+1] = strconv.Itoa(_limit)
+\t\t\t\t\t\t}
+\t\t\t\t\t}
 \t\t\t\t}
 \t\t\t}
 \t\t}

@@ -137,7 +137,17 @@ def capture_layout_cache(model: str, sha: str) -> None:
     try:
         if not VRAM_BEFORE_FILE.exists() or not LAYOUT_KEY_FILE.exists():
             return
-        vram_before = json.loads(VRAM_BEFORE_FILE.read_text())
+        raw = json.loads(VRAM_BEFORE_FILE.read_text())
+        # H11: timestamp validation — skip stale snapshots (race condition on quick reload)
+        if isinstance(raw, dict):
+            snap_age = time.time() - raw.get("ts", 0)
+            if snap_age > 30:
+                print(f"[layout-cache] before-snapshot too old ({snap_age:.0f}s), skipping")
+                VRAM_BEFORE_FILE.unlink(missing_ok=True)
+                return
+            vram_before = raw.get("vram", [])
+        else:
+            vram_before = raw  # legacy format without timestamp
         vram_after  = get_per_gpu_vram_used()
         cache_key   = LAYOUT_KEY_FILE.read_text().strip()
         if not vram_before or not vram_after or len(vram_before) != len(vram_after):
@@ -490,6 +500,17 @@ def main():
         OLLAMA_URL = sys.argv[2].rstrip("/")
 
     sha = model_sha(model)
+
+    # H8: Skip full optimization for large models (long load times make iterative
+    # scale testing impractical — e.g. llama4:scout = 8.5 min per reload × 6 scales).
+    # Large models get scale-only pass without MTP testing.
+    skip_threshold_gb = float(os.environ.get("OLLAMA_SKIP_OPTIMIZE_SIZE_GB", "50"))
+    model_bytes = get_model_file_bytes(model)
+    large_model = model_bytes > skip_threshold_gb * 1e9
+    if large_model:
+        print(f"[auto-optimize] model {model_bytes/1e9:.1f} GB > {skip_threshold_gb} GB threshold — "
+              f"skipping MTP/scale optimization (run too slow for large models)")
+
     cached = load_cache(sha)
     if cached:
         apply_cached(cached)
@@ -500,6 +521,12 @@ def main():
         # Capture layout cache if not yet done (model loads after apply_cached triggers reload).
         # Wait briefly for the model to fully load before measuring VRAM delta.
         time.sleep(30)
+        capture_layout_cache(model, sha)
+        return
+
+    if large_model:
+        # For large models: only write a default scale override, no benchmarking.
+        write_override(1.2)
         capture_layout_cache(model, sha)
         return
 
