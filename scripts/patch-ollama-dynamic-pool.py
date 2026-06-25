@@ -195,8 +195,12 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// FA=ON: TILE kernel available on all architectures ≥ CC 5.0.
 		// RTX uses MMA FA (fast), Tesla/GTX use TILE FA (slower but tiny compute buffer).
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
-		// Clear batch cap: FA keeps compute buffers tiny regardless of batch/context size.
-		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
+		// Enable batch cap to reduce -np 2→1, halving the KV-cache per GPU.
+		// With partial fill, RTX 3060 gets ~9.8 GiB model; KV at np=2 needs 2 GiB
+		// on CUDA10 (leaving only 0.4 GiB margin → OOM). np=1 halves KV to ~1 GiB.
+		if os.Getenv("OLLAMA_MAX_BATCH_SIZE") == "" {
+			os.Setenv("OLLAMA_MAX_BATCH_SIZE", "64")
+		}
 		// Tighten overhead scale for full pool with FA=ON.
 		//
 		// Default scale=1.4 was calibrated for FA=OFF where the gallocr compute buffer
