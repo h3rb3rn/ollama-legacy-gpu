@@ -31,7 +31,7 @@ import sys
 import re
 from pathlib import Path
 
-PATCH_GUARD   = "OLLAMA_FAST_POOL_VRAM_GB_v2"
+PATCH_GUARD   = "OLLAMA_FAST_POOL_VRAM_GB_v3"
 TARGET_FILE   = "llm/llama_server.go"
 INSERT_BEFORE = "params = appendFlashAttentionArgs(params, launch.gpus)"
 
@@ -157,6 +157,16 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		launch.extraEnvs["CUDA_VISIBLE_DEVICES"] = fastDevices
 		launch.extraEnvs["OLLAMA_FORCE_GPU_LAYERS"] = "999"
 		os.Setenv("OLLAMA_FORCE_GPU_LAYERS", "999")
+		// Fix bandwidth factors for fast pool: OLLAMA_GPU_BANDWIDTHS contains all 12 GPUs
+		// (worst→best). fit.cpp reads sequentially from index 0, so fast pool CUDA0 would
+		// get M10 bandwidth (83 GB/s) instead of RTX 2060 (336 GB/s). Override with
+		// OLLAMA_FAST_GPU_BANDWIDTHS which contains only the 5 RTX GPU bandwidths.
+		if fastBW := os.Getenv("OLLAMA_FAST_GPU_BANDWIDTHS"); fastBW != "" {
+			os.Setenv("OLLAMA_GPU_BANDWIDTHS", fastBW)
+		}
+		if fastMaxBW := os.Getenv("OLLAMA_FAST_GPU_MAX_BANDWIDTH"); fastMaxBW != "" {
+			os.Setenv("OLLAMA_GPU_MAX_BANDWIDTH", fastMaxBW)
+		}
 		// Clear full-pool batch cap (FA makes compute buffers tiny, no cap needed).
 		os.Setenv("OLLAMA_MAX_BATCH_SIZE", "")
 		// Explicitly enable FA: fast GPUs all support FA (CC >= 7.5)

@@ -201,6 +201,11 @@ lines += [
     f"OLLAMA_GPU_OVERHEAD={gpu_overhead}",
     f"OLLAMA_FAST_GPU_DEVICES={fast_pool_uuids}",
     f"OLLAMA_FAST_POOL_VRAM_GB={fast_pool_vram_gb}",
+    # Bandwidths for fast pool GPUs only (in fast pool CUDA order, worst→best within RTX).
+    # Used by greedy fill in fit.cpp so bandwidth factors match the actual fast pool GPUs,
+    # not the full 12-GPU set (which would assign M10 bandwidth to fast pool CUDA0).
+    f"OLLAMA_FAST_GPU_BANDWIDTHS={','.join(str(g['bw_gbs']) for g in fast_pool_gpus)}",
+    f"OLLAMA_FAST_GPU_MAX_BANDWIDTH={max(g['bw_gbs'] for g in fast_pool_gpus) if fast_pool_gpus else max_bw}",
     # Reversed order (best→worst) for full-pool large models.
     f"OLLAMA_CUDA_REVERSED={','.join(g['uuid'] for g in reversed(gpus))}",
     # Per-GPU bandwidth in GB/s (CUDA-order, comma-separated).
