@@ -110,6 +110,18 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		}
 	}
 
+	// Set main GPU to the highest CUDA index (= best bandwidth GPU in worst→best ordering).
+	// With split-mode=layer (default), main-gpu holds intermediate results and KV cache —
+	// the pipeline coordinator. Default is CUDA0 (Tesla M10, 83 GB/s on N04-RTX) which
+	// causes all inter-GPU transfers to bottleneck on the slowest GPU, driving up CPU usage
+	// and leaving RTX GPUs at near-zero utilisation.
+	// Setting main-gpu = nd-1 (RTX 3060, 360 GB/s) makes the fastest GPU the coordinator.
+	_cudaVisForMain := os.Getenv("CUDA_VISIBLE_DEVICES")
+	_ndForMain := strings.Count(_cudaVisForMain, ",") + 1
+	if _ndForMain > 1 {
+		os.Setenv("OLLAMA_MAIN_GPU_IDX", strconv.Itoa(_ndForMain-1))
+	}
+
 	fastDevices := os.Getenv("OLLAMA_FAST_GPU_DEVICES")
 	fastPoolGB  := os.Getenv("OLLAMA_FAST_POOL_VRAM_GB")
 	if fastDevices == "" || fastPoolGB == "" {
@@ -276,6 +288,15 @@ def patch(path: Path) -> bool:
     # compute buffer from 11.6 GiB (batch=512) to 1.07 GiB (batch=64), allowing
     # Tesla M10/M60 to participate in llama4:scout inference on all 12 GPUs.
     INLINE_BATCH_CAP = '''selectGPUPool(&launch)
+\t// [main-gpu: set pipeline coordinator to best GPU (highest CUDA index = best bandwidth)]
+\t// Default main-gpu=0 = Tesla M10 (83 GB/s) on N04-RTX → pipeline bottleneck.
+\t// RTX 3060 (CUDA nd-1, 360 GB/s) as coordinator: 4.3× faster inter-GPU transfers,
+\t// eliminates CPU escalation from slow coordinator PCIe transfers.
+\tif _mgIdx := os.Getenv("OLLAMA_MAIN_GPU_IDX"); _mgIdx != "" {
+\t\tparams = append(params, "--main-gpu", _mgIdx)
+\t\tslog.Info("pipeline coordinator: setting --main-gpu to best GPU", "index", _mgIdx)
+\t\tos.Unsetenv("OLLAMA_MAIN_GPU_IDX")
+\t}
 \t// [layout cache: inject cached --tensor-split to bypass llama.cpp fitting algorithm]
 \tif _ts := os.Getenv("OLLAMA_CACHED_TENSOR_SPLIT"); _ts != "" {
 \t\tparams = append(params, "--tensor-split", _ts)
