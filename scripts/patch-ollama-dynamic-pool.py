@@ -205,16 +205,13 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// early ("overhead=1.30x too tight") and fall back to VRAM-weighted distribution
 		// across all 12 GPUs, which spreads layers equally instead of filling RTX first.
 		//
-		// With scale=1.05 (5% headroom), greedy fill correctly packs RTX 3060 and
-		// RTX 2060 before extending to GTX/Tesla, using only as many GPUs as needed.
-		// Tesla M10 may receive 0 layers if the model fits in RTX+GTX capacity.
-		// With FA=ON, compute buffers are ~278 MiB per GPU (not 11.4 GiB without FA).
-		// The default overhead scale was calibrated for FA=OFF. Even scale=1.05 still
-		// causes greedy fill to abort at 44/49 layers due to non-uniform MoE layer sizes.
-		// Use scale=1.0 (no margin) so greedy fill can pack RTX GPUs to capacity first.
-		// The VRAM-weighted fallback is only triggered if strictly impossible to fit.
-		if cur := os.Getenv("OLLAMA_LAYER_OVERHEAD_SCALE"); cur == "" || cur > "1.0" {
-			os.Setenv("OLLAMA_LAYER_OVERHEAD_SCALE", "1.0")
+		// Scale=1.2: reserves 20% of each GPU's VRAM budget for KV-cache after
+		// model weights are placed. This prevents OOM when the KV-cache is allocated
+		// after greedy fill (RTX 3060 at 80%+ model → only 2 GiB left → OOM on 2 GiB KV).
+		// With FA=ON compute buffers are tiny (~278 MiB), so 1.2 leaves enough headroom
+		// for both the partial-fill overflow placement and the KV-cache allocation.
+		if cur := os.Getenv("OLLAMA_LAYER_OVERHEAD_SCALE"); cur == "" || cur > "1.2" {
+			os.Setenv("OLLAMA_LAYER_OVERHEAD_SCALE", "1.2")
 		}
 		// Cache key uses the EFFECTIVE CUDA_VISIBLE_DEVICES (full pool = all 12 GPUs).
 		_allVis := os.Getenv("CUDA_VISIBLE_DEVICES")
