@@ -31,7 +31,7 @@ import sys
 import re
 from pathlib import Path
 
-PATCH_GUARD   = "OLLAMA_FAST_POOL_VRAM_GB_v3"
+PATCH_GUARD   = "OLLAMA_FAST_POOL_VRAM_GB_v4"
 TARGET_FILE   = "llm/llama_server.go"
 INSERT_BEFORE = "params = appendFlashAttentionArgs(params, launch.gpus)"
 
@@ -222,12 +222,10 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		os.Setenv("OLLAMA_FLASH_ATTENTION", "true")
 		// H2: f16 KV for full pool — TILE-kernel on Tesla has constraints with q4_0.
 		os.Setenv("OLLAMA_KV_CACHE_TYPE", "f16")
-		// H3: row split = tensor parallelism (all GPUs compute each layer simultaneously).
-		// Replaces layer split (sequential pipeline with M10 as bottleneck).
-		// Configurable via OLLAMA_SPLIT_MODE env override in .env.
-		if os.Getenv("OLLAMA_SPLIT_MODE") == "" {
-			os.Setenv("OLLAMA_SPLIT_MODE", "row")
-		}
+		// H3: split-mode controlled by OLLAMA_SPLIT_MODE env var (default: not set = layer).
+		// 'row' = tensor parallelism — beneficial for hybrid/recurrent models (qwen3.6-40b-neo)
+		//         but causes CUDA errors with MoE models (llama4:scout) and is NOT set automatically.
+		// Set OLLAMA_SPLIT_MODE=row in .env or per-request to enable for specific models.
 		// Enable batch cap to reduce -np 2→1, halving the KV-cache per GPU.
 		// With partial fill, RTX 3060 gets ~9.8 GiB model; KV at np=2 needs 2 GiB
 		// on CUDA10 (leaving only 0.4 GiB margin → OOM). np=1 halves KV to ~1 GiB.
@@ -315,8 +313,12 @@ def patch(path: Path) -> bool:
 \t\tslog.Info("GPU split mode", "mode", _sm)
 \t\tos.Unsetenv("OLLAMA_SPLIT_MODE")
 \t}
-\t// [H7: continuous batching — mix tokens from concurrent requests in same GPU batch]
-\tparams = append(params, "--cont-batching")
+\t// [H7: continuous batching — fast pool only; MoE models (llama4:scout) crash with cont-batching]
+\t// Full pool (OLLAMA_MAX_BATCH_SIZE != "") = MoE/hybrid → no cont-batching.
+\t// Fast pool (OLLAMA_MAX_BATCH_SIZE == "") = dense transformer → cont-batching safe.
+\tif os.Getenv("OLLAMA_MAX_BATCH_SIZE") == "" {
+\t\tparams = append(params, "--cont-batching")
+\t}
 \t// [main-gpu: set pipeline coordinator to best GPU (highest CUDA index = best bandwidth)]
 \t// Default main-gpu=0 = Tesla M10 (83 GB/s) on N04-RTX → pipeline bottleneck.
 \t// RTX 3060 (CUDA nd-1, 360 GB/s) as coordinator: 4.3× faster inter-GPU transfers,
