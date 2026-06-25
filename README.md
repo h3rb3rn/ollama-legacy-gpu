@@ -1,5 +1,7 @@
 # ollama-legacy-gpu
 
+> **Latest release: [v0.30.0](https://github.com/h3rb3rn/ollama-legacy-gpu/releases/tag/v0.30.0)** — based on Ollama v0.30.10 · Docker: `ghcr.io/h3rb3rn/ollama-legacy:cuda12-maxwell-latest`
+
 A fork of [Ollama](https://github.com/ollama/ollama) — the Go runtime and Docker packaging — optimized for **heterogeneous multi-GPU pools** that combine modern RTX cards with legacy Tesla M10/M60 GPUs on CUDA 12.
 
 > **Reference system: N04-RTX**  
