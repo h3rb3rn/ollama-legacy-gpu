@@ -76,15 +76,7 @@ RUN cmake -S llama/server \
           --preset llama_cuda_v12_linux \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
           -DGGML_CUDA_FA=OFF \
-    && if [ -n "${LLAMA_CPP_FORK}" ]; then \
-        echo "Using patched fit.cpp from: ${LLAMA_CPP_FORK}"; \
-        LLAMA_SRC="build/llama-server-cuda_v12/_deps/llama_cpp-src"; \
-        git clone --depth=1 "${LLAMA_CPP_FORK}" /tmp/llama-fork; \
-        cp /tmp/llama-fork/common/fit.cpp "$LLAMA_SRC/common/fit.cpp"; \
-        cp /tmp/llama-fork/common/fit.h   "$LLAMA_SRC/common/fit.h" 2>/dev/null || true; \
-        echo "Patched fit.cpp: $(git -C /tmp/llama-fork rev-parse --short HEAD)"; \
-        rm -rf /tmp/llama-fork; \
-    fi
+    && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (no fork clone needed)"
 
 # Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.
 # When LLAMA_CPP_FORK is used, the fork already has these patches natively

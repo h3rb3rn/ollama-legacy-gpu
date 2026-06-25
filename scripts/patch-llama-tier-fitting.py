@@ -134,29 +134,32 @@ FORCE_LAYERS_CODE = '''
                 _layers_left  -= _n;
                 _total_layers += _n;
             }}
-            // Safety: if greedy fill did not place ALL layers (partial or zero fill),
-            // fall back to VRAM-weighted distribution — NOT equal distribution.
-            // Equal distribution ignores per-GPU VRAM size: a 8 GB Tesla M10 would
-            // receive the same layer count as a 12 GB RTX 3060, causing OOM on small GPUs.
-            // VRAM-weighted split gives each GPU a share proportional to its free budget.
+            // Partial-fill fallback: keep the greedy-placed layers and distribute only
+            // the overflow by raw VRAM (no bandwidth weighting). This preserves the
+            // bandwidth-priority ordering so RTX cards keep their greedy share and only
+            // Tesla/GTX absorb the small overflow.
+            //
+            // Previous full-reset VRAM-weighted fallback discarded all greedy placement:
+            //   RTX 3060 had 9 layers from greedy → dropped to ~6.5 GiB (leaving 5.5 GiB idle)
+            // Now: RTX 3060 keeps 9 layers + tiny raw-VRAM overflow share → ~10 GB used
             if (_total_layers < (uint32_t)(hp_ngl + 1)) {{
-                // Compute total budget for normalization
-                float _total_budget = 0.0f;
+                uint32_t _overflow = (uint32_t)(hp_ngl + 1) - _total_layers;
+                float _total_raw = 0.0f;
                 for (size_t _id = 0; _id < nd; _id++) {{
                     float _b = (float)(dmds_full[_id].free) - (float)margins_s[_id];
-                    if (_b > 0) _total_budget += _b;
+                    if (_b > 0) _total_raw += _b;
                 }}
                 LOG_WRN("%s: greedy fill placed only %d/%d layers (overhead=%.2fx too tight); "
-                        "falling back to VRAM-weighted distribution across %zu GPU(s)\\n",
-                        __func__, _total_layers, hp_ngl + 1, _ovhd, nd);
-                mparams->n_gpu_layers = hp_ngl + 1;
-                if (nd > 1 && tensor_split && _total_budget > 0) {{
+                        "distributing %d overflow layer(s) by raw VRAM across %zu GPU(s)\\n",
+                        __func__, _total_layers, hp_ngl + 1, _ovhd, _overflow, nd);
+                if (nd > 1 && tensor_split && _total_raw > 0) {{
                     for (size_t _id = 0; _id < nd; _id++) {{
                         float _b = (float)(dmds_full[_id].free) - (float)margins_s[_id];
-                        tensor_split[_id] = (_b > 0) ? (_b / _total_budget) : 0.0f;
+                        if (_b > 0) tensor_split[_id] += (_b / _total_raw) * (float)_overflow;
                     }}
                     mparams->tensor_split = tensor_split;
                 }}
+                mparams->n_gpu_layers = hp_ngl + 1;
                 tensor_buft_overrides[0] = {{nullptr, nullptr}};
                 mparams->tensor_buft_overrides = tensor_buft_overrides;
                 return;
