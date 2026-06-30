@@ -481,6 +481,38 @@ def patch(path: Path) -> bool:
     return True
 
 
+def patch_ggml_cuda(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    print(f"  Found ggml-cuda.cu: {path}")
+    content = path.read_text()
+    
+    if "// [OLLAMA_P2P_FIX]" in content:
+        print("  ggml-cuda.cu already patched (P2P fix present)")
+        return True
+        
+    set_target = '        CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));'
+    set_replacement = '        // [OLLAMA_P2P_FIX]\n        ggml_cuda_set_device(id);\n        CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));'
+    
+    get_target = '        CUDA_CHECK(cudaMemcpyAsync(buf_host, extra->data_device[id], original_size, cudaMemcpyDeviceToHost, cudaStreamPerThread));'
+    get_replacement = '        // [OLLAMA_P2P_FIX]\n        ggml_cuda_set_device(id);\n        CUDA_CHECK(cudaMemcpyAsync(buf_host, extra->data_device[id], original_size, cudaMemcpyDeviceToHost, cudaStreamPerThread));'
+    
+    sync_target = '    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {\n        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));'
+    sync_replacement = '    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {\n        ggml_cuda_set_device(id);\n        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));'
+
+    if set_target not in content or get_target not in content:
+        print("  Error: split buffer target strings not found in ggml-cuda.cu", file=sys.stderr)
+        return False
+        
+    content = content.replace(set_target, set_replacement, 1)
+    content = content.replace(get_target, get_replacement, 1)
+    content = content.replace(sync_target, sync_replacement, 2)
+    
+    path.write_text(content)
+    print("  ggml-cuda.cu P2P set_device patch successfully applied!")
+    return True
+
+
 def find_fit_cpp_and_patch(ollama_root: Path) -> bool:
     print(f"Looking for llama.cpp {SOURCE_FILE} under {ollama_root}...")
     target = find_fit_cpp(ollama_root)
@@ -488,7 +520,21 @@ def find_fit_cpp_and_patch(ollama_root: Path) -> bool:
         print(f"  {SOURCE_FILE} not found — skipping (cmake configure may not have run yet)")
         return True  # non-fatal
     print(f"  Target: {target}")
-    return patch(target)
+    ok = patch(target)
+    if not ok:
+        return False
+        
+    # Also patch ggml-cuda.cu if it exists in the build dir
+    ggml_cuda_path = ollama_root / "build" / "llama-server-cuda_v12" / "_deps" / "llama_cpp-src" / "ggml" / "src" / "ggml-cuda" / "ggml-cuda.cu"
+    if ggml_cuda_path.is_file():
+        patch_ggml_cuda(ggml_cuda_path)
+    else:
+        # Also try other build directory (v11) if it exists
+        ggml_cuda_path_v11 = ollama_root / "build" / "llama-server-cuda_v11" / "_deps" / "llama_cpp-src" / "ggml" / "src" / "ggml-cuda" / "ggml-cuda.cu"
+        if ggml_cuda_path_v11.is_file():
+            patch_ggml_cuda(ggml_cuda_path_v11)
+            
+    return True
 
 
 def main():
@@ -503,3 +549,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

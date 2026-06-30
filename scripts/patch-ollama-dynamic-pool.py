@@ -174,6 +174,15 @@ func selectGPUPool(launch *llamaServerLaunchConfig) {
 		// H2: q4_0 KV cache for fast pool — FA=ON (MMA kernel) supports quantised KV,
 		// 4× smaller than f16 → enables np=2 with generous headroom on RTX.
 		os.Setenv("OLLAMA_KV_CACHE_TYPE", "q4_0")
+		// Reset overhead scale for fast pool.
+		// The auto-optimizer calibrates OLLAMA_LAYER_OVERHEAD_SCALE for the full pool
+		// (FA=ON but with Tesla TILE kernels + f16 KV = larger buffers). For the fast
+		// pool (all RTX, FA MMA kernel + q4_0 KV), compute buffers are ~278 MiB and KV
+		// is 4× smaller, so a scale of 1.1 gives sufficient headroom without causing
+		// greedy fill to abort early and fall back to BW-budget distribution, which
+		// can leave 1-2 layers on CPU.
+		// Scale 1.1 = 10% reserve for KV-cache + fragmentation on RTX 12 GB GPUs.
+		os.Setenv("OLLAMA_LAYER_OVERHEAD_SCALE", "1.1")
 		// Cache key uses the EFFECTIVE CUDA_VISIBLE_DEVICES (fast pool = RTX UUIDs).
 		if _split := _readLayoutCache(launch.modelPath, fastDevices); _split != "" {
 			os.Setenv("OLLAMA_CACHED_TENSOR_SPLIT", _split)

@@ -77,6 +77,7 @@ RUN cmake -S llama/server \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
           -DGGML_CUDA_FA=OFF \
           -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
+          -DGGML_CPU_ALL_VARIANTS=ON \
     && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (no fork clone needed)"
 
 # Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.

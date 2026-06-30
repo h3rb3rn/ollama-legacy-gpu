@@ -59,6 +59,7 @@ RUN --mount=type=cache,target=/root/.ccache \
     cmake -S llama/server \
           --preset llama_cuda_v11_linux \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
+          -DGGML_CPU_ALL_VARIANTS=ON \
     && cmake --build build/llama-server-cuda_v11 \
              --parallel "${JOBS}" \
     && cmake --install build/llama-server-cuda_v11 \
