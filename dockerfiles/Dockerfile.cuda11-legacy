@@ -34,7 +34,7 @@ ARG LLAMA_CPP_FORK=""
 FROM nvidia/cuda:${CUDA11_VERSION}-devel-ubuntu22.04 AS builder
 
 ARG OLLAMA_VERSION=main
-ARG CUDA_ARCHITECTURES="37-virtual;50-virtual;52-virtual;60-virtual;61-virtual;70-virtual;75-virtual;80-virtual"
+ARG CUDA_ARCHITECTURES="37-virtual;50-virtual;52-virtual"
 ARG JOBS=8
 ARG CMAKE_VERSION=3.31.7
 # LLAMA_CPP_FORK must be re-declared inside the stage to be visible in RUN commands.
@@ -83,7 +83,6 @@ RUN cmake -S llama/server \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
           -DGGML_CUDA_FA=OFF \
           -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
-          -DGGML_CPU_ALL_VARIANTS=ON \
     && if [ -n "${LLAMA_CPP_FORK}" ]; then \
         echo "Using custom llama.cpp fork: ${LLAMA_CPP_FORK}"; \
         LLAMA_SRC="build/llama-server-cuda_v11/_deps/llama_cpp-src"; \
