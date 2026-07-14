@@ -15,25 +15,46 @@
 #     --build-arg OLLAMA_VERSION=v0.9.0 \
 #     --build-arg JOBS=8 \
 #     -t ghcr.io/<owner>/ollama-legacy:cuda11-legacy-v0.9.0 .
+#
+# Optional build args:
+#   CUDA_ARCHITECTURES  NVCC target list (default: Kepler + Maxwell + all newer up to Ampere)
+#   JOBS                Parallel build jobs
 
 ARG CUDA11_VERSION=11.8.0
+ARG CMAKE_VERSION=3.31.7
+# Optional: use a custom llama.cpp fork instead of the version bundled with Ollama.
+# Set to "https://github.com/h3rb3rn/llama.cpp-legacy-gpu.git" to use our fork
+# with native greedy fill + bandwidth-weighted budgets (no Python patches needed).
+# Set to "" (empty) to use Ollama's bundled llama.cpp version (default).
+ARG LLAMA_CPP_FORK=""
 
 # ── Stage 1: Build toolchain ──────────────────────────────────────────────────
-FROM nvidia/cuda:${CUDA11_VERSION}-devel-ubuntu20.04 AS builder
+# Using devel-ubuntu22.04 base to automatically get GCC 11, which supports
+# both Cooperlake (-mavx512bf16) and Alderlake (-mavxvnni) CPU backend targets.
+FROM nvidia/cuda:${CUDA11_VERSION}-devel-ubuntu22.04 AS builder
 
 ARG OLLAMA_VERSION=main
 ARG CUDA_ARCHITECTURES="37-virtual;50-virtual;52-virtual;60-virtual;61-virtual;70-virtual;75-virtual;80-virtual"
 ARG JOBS=8
+ARG CMAKE_VERSION=3.31.7
+# LLAMA_CPP_FORK must be re-declared inside the stage to be visible in RUN commands.
+ARG LLAMA_CPP_FORK=""
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_GENERATOR=Ninja
 
-# CMake 3.31+ and Ninja from source — Ubuntu 20.04 apt ships versions that are too old
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git curl ca-certificates python3 ninja-build \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://github.com/Kitware/CMake/releases/download/v3.31.7/cmake-3.31.7-linux-x86_64.tar.gz \
-       | tar -C /usr/local --strip-components=1 -xz
+    build-essential git curl ca-certificates ninja-build ccache python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# CMake >= 3.24 required — Ubuntu 22.04 apt only ships 3.22
+RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
+    | tar -C /usr/local --strip-components=1 -xz
+
+COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
+COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
+COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
+COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
 
 WORKDIR /src
 RUN git clone --depth=1 \
@@ -54,33 +75,89 @@ RUN python3 /tmp/inject-presets.py \
     --source  /src \
     --presets /tmp/cuda11-presets.json
 
-# Build CUDA v11 runner using our injected preset
-RUN --mount=type=cache,target=/root/.ccache \
-    cmake -S llama/server \
+# Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
+# If LLAMA_CPP_FORK is set, override the bundled version with our fork.
+# Separated from build so patches can be applied in between.
+RUN cmake -S llama/server \
           --preset llama_cuda_v11_linux \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
+          -DGGML_CUDA_FA=OFF \
+          -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
           -DGGML_CPU_ALL_VARIANTS=ON \
-    && cmake --build build/llama-server-cuda_v11 \
-             --parallel "${JOBS}" \
+    && if [ -n "${LLAMA_CPP_FORK}" ]; then \
+        echo "Using custom llama.cpp fork: ${LLAMA_CPP_FORK}"; \
+        LLAMA_SRC="build/llama-server-cuda_v11/_deps/llama_cpp-src"; \
+        rm -rf "$LLAMA_SRC"; \
+        git clone --depth=1 "${LLAMA_CPP_FORK}" "$LLAMA_SRC"; \
+        echo "Fork: $(git -C $LLAMA_SRC rev-parse --short HEAD)"; \
+    fi
+
+# Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.
+# When LLAMA_CPP_FORK is used, the fork already has these patches natively
+# so this step is a no-op (the patch guard prevents double-patching).
+RUN python3 /tmp/patch-llama-tier-fitting.py /src
+
+# Step 3: cmake build + install
+# NOTE: No --component filter → installs llama-server binary + CUDA libs.
+# --component llama-server only installs .so files, not the binary itself.
+RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
+    cmake --build build/llama-server-cuda_v11 \
+          --parallel "${JOBS}" \
     && cmake --install build/llama-server-cuda_v11 \
-             --component llama-server \
              --strip
+
+# Collect all runtime files into /runtime:
+#   cmake installs llama-server to dist/bin/ (not dist/lib/ollama/).
+#   The Ollama Go binary searches for llama-server at /usr/lib/ollama/llama-server.
+#   All shared libs are required because RPATH=$ORIGIN → /usr/lib/ollama/.
+#   libllama-server-impl.so and libllama-quantize-impl.so are built but not
+#   installed by cmake — must be copied manually from the build directory.
+#   libnccl is linked by libggml-cuda.so and must come from the builder image.
+RUN mkdir -p /runtime \
+    && cp -aT /src/dist/lib/ollama /runtime \
+    && find /src/dist/lib -maxdepth 1 -name 'lib*.so*' -exec cp -P {} /runtime/ \; \
+    && find /src/build/llama-server-cuda_v11/bin -maxdepth 1 \( -type f -o -type l \) \
+       -exec cp -P {} /runtime/ \; \
+    && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libnccl.so*' -exec cp -P {} /runtime/cuda_v11/ \; 2>/dev/null || true \
+    && ls -lh /runtime/ /runtime/cuda_v11/
+
+# Go patches — applied before go build:
+# 1. Tier-aware FA: enable FA when model uses only fast GPUs (CC >= 7.0)
+RUN python3 /tmp/patch-ollama-fa.py /src
+# 2. Dynamic GPU pool: per-model CUDA_VISIBLE_DEVICES selection based on model size
+#    Small models (fits in FAST_POOL_VRAM_GB): use fast GPUs only (FA=ON)
+#    Large models: use all GPUs (FA=OFF, full Tesla pool)
+RUN python3 /tmp/patch-ollama-dynamic-pool.py /src
+# 3. Batch size cap: OLLAMA_MAX_BATCH_SIZE limits numBatch/numUBatch.
+#    Reduces prefill compute buffer (batch × ctx × heads × 4 bytes) so Tesla
+#    GPUs can participate in multi-GPU inference without OOM.
+RUN python3 /tmp/patch-ollama-batch.py /src
 
 # Go binary
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -buildmode=pie -ldflags="-w -s" -o /bin/ollama .
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl libvulkan1 libopenblas0 \
+    ca-certificates curl libvulkan1 libopenblas0 python3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /bin/ollama          /usr/bin/ollama
-COPY --from=builder /src/dist/lib/ollama /usr/lib/ollama
+COPY --from=builder /bin/ollama  /usr/bin/ollama
+COPY --from=builder /runtime     /usr/lib/ollama
 
-ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+# GPU auto-detection, tier-fitting entrypoint, auto-optimizer and proxy
+COPY scripts/gpu-detect.sh         /usr/local/bin/gpu-detect.sh
+COPY scripts/ollama-entrypoint.sh  /usr/local/bin/ollama-entrypoint.sh
+COPY scripts/auto-optimize.py      /usr/local/bin/auto-optimize.py
+COPY scripts/ollama-proxy.py       /usr/local/bin/ollama-proxy.py
+RUN chmod +x /usr/local/bin/gpu-detect.sh /usr/local/bin/ollama-entrypoint.sh \
+    && chmod +x /usr/local/bin/auto-optimize.py /usr/local/bin/ollama-proxy.py
+
+# /usr/lib/ollama must be first so libggml-base.so.0 is found when libggml-cuda.so
+# (RPATH=$ORIGIN pointing to cuda_v11/) falls back to LD_LIBRARY_PATH.
+ENV LD_LIBRARY_PATH=/usr/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV OLLAMA_HOST=0.0.0.0:11434
@@ -91,5 +168,5 @@ VOLUME ["/root/.ollama"]
 HEALTHCHECK --interval=30s --timeout=15s --retries=5 --start-period=90s \
     CMD curl -sf http://localhost:11434/api/tags || exit 1
 
-ENTRYPOINT ["/usr/bin/ollama"]
+ENTRYPOINT ["/usr/local/bin/ollama-entrypoint.sh"]
 CMD ["serve"]
