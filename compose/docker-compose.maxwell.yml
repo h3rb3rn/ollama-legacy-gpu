@@ -15,6 +15,8 @@ services:
       - OLLAMA_KEEP_ALIVE=5m
       # PTX-JIT kernels are cached — no cold-start delay after the first run
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
+      - OLLAMA_KV_CACHE_TYPE=q4_0
+      - OLLAMA_FLASH_ATTENTION=1
     deploy:
       resources:
         reservations:
