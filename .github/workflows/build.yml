@@ -116,7 +116,6 @@ jobs:
           build-args: |
             OLLAMA_VERSION=${{ needs.resolve-version.outputs.version }}
             JOBS=2
-            LLAMA_CPP_FORK=https://github.com/h3rb3rn/llama.cpp-legacy-gpu.git
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda11-legacy-${{ needs.resolve-version.outputs.short }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda11-legacy-latest

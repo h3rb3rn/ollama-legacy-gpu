@@ -78,6 +78,11 @@ RUN python3 /tmp/inject-presets.py \
 # Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
 # If LLAMA_CPP_FORK is set, override the bundled version with our fork.
 # Separated from build so patches can be applied in between.
+#
+# WARNING: FetchContent re-runs its git update step during `cmake --build` and
+# checks out the tag from LLAMA_CPP_VERSION (e.g. b10434). A fork without that
+# tag fails with "pathspec ... did not match any file(s) known to git".
+# Only set LLAMA_CPP_FORK if the fork carries the tags Ollama pins to.
 RUN cmake -S llama/server \
           --preset llama_cuda_v11_linux \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
