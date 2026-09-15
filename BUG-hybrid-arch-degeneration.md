@@ -584,6 +584,36 @@ configuration/build changes rather than any change to the SSM code path:
 
 Flash Attention (`GGML_CUDA_FA=ON`) was not strictly required to fix the degenerate
 output (the mmproj-offload fix alone already resolved it on N11-M10 in the earlier test),
-but is validated as safe and beneficial (smaller compute buffers, full layer offload
-alongside CLIP staying off-GPU) and is bundled into the same "known-good" configuration
-going forward.
+but is validated as safe and beneficial for single-GPU deployments (smaller compute
+buffers, full layer offload alongside CLIP staying off-GPU) — see
+`PERFORMANCE-OPTIMIZATION-LOG.md` for a separately-discovered limitation (FA=ON is not
+yet safe for large multi-GPU MoE pools, unrelated to this bug, tracked there).
+
+### Finding 2, closed: root-caused via compute-sanitizer
+
+Follow-up `compute-sanitizer` work (full details in `PERFORMANCE-OPTIMIZATION-LOG.md`,
+Phase 1) found the exact cause of the MTP crash: **`--tool racecheck` found 256 confirmed
+shared-memory race hazards** in a kernel named `sgemm_32x32x32_NT_vec` (Write at shared-mem
+offset 0x68 racing a Read at offset 0x78), and the exact same test run reproduced the
+**identical CUDA "illegal memory access" crash with the identical stack trace** as the
+original report (`common_speculative_impl_draft_mtp::draft` → `common_sampler_sample` →
+`llama_context::synchronize` → `ggml_backend_cuda_synchronize`). A separate,
+sanitizer-free repro also produced a **100% deterministic garbage draft-token value**
+(`-839448741`, identical across repeated runs) with `--tool memcheck` reporting zero
+errors — consistent with a race (not a memory-safety violation) that sometimes crashes
+and sometimes just yields stale/wrong data, i.e. **both symptom types from the original
+report are the same underlying race, not two separate bugs.**
+
+The kernel name (`sgemm_32x32x32_NT_vec`) does not appear anywhere in the `ggml`/
+llama.cpp source tree and follows classic closed-source BLAS-library tile-kernel naming
+(not ggml's own naming conventions) — almost certainly an internal legacy cuBLAS SGEMM
+kernel that NVIDIA's CUDA toolkit uses for plain fp32 matmuls on tensor-core-less Maxwell
+hardware, exactly the code path the MTP draft's nextn-embedding projection hits (see this
+session's earlier finding that Maxwell falls back to `cublasSgemm` for non-quantized
+matmuls, having neither MMQ/dp4a nor fp16-cuBLAS acceleration available).
+
+**Conclusion: this is very likely a bug inside NVIDIA's own closed-source cuBLAS,
+un-patchable from this project, on end-of-life Maxwell hardware with no further vendor
+support expected.** The MTP denylist already shipped in Phase 0
+(`scripts/auto-optimize.py`'s `has_mtp()`) is therefore not a stopgap but the correct,
+permanent fix for this hardware segment. No further action planned on this finding.

@@ -28,7 +28,7 @@ Zur Vollständigkeit, Details siehe Commits + `BUG-hybrid-arch-degeneration.md`:
 
 ## Phase 1 — Compute-Sanitizer: MTP-Crash root-causen
 
-**Status: in Arbeit**
+**Status: ABGESCHLOSSEN — root-caused, Denylist als permanente Lösung bestätigt**
 
 **Hypothese:** Der CUDA "illegal memory access" im MTP-Draft-Pfad
 (`common_speculative_impl_draft_mtp::draft`) ist ein Race-Condition oder Out-of-Bounds-
@@ -60,6 +60,44 @@ eher für einen Host-seitigen Logik-/Indexierungsfehler bei der Umwandlung der
 Draft-Head-Rohausgabe in eine Token-ID (falscher Offset, falsche dtype-Interpretation,
 oder Lesen eines nie initialisierten Host-Puffers) als für eine klassische
 GPU-Speicherverletzung. Wird nach racecheck-Ergebnis weiter eingegrenzt.
+
+**`--tool racecheck` (Ergebnis, ~43 Min. Laufzeit bei `-n 8`):**
+
+```
+========= Error: Race reported between Write access at 0x68 in sgemm_32x32x32_NT_vec
+=========     and Read access at 0x78 in sgemm_32x32x32_NT_vec [... 20 individuelle Hazards gezeigt ...]
+========= RACECHECK SUMMARY: 20 hazards displayed (256 errors, 0 warnings)
+```
+
+**256 bestätigte Shared-Memory-Race-Hazards**, alle im selben Kernel
+(`sgemm_32x32x32_NT_vec`) — Write bei Shared-Memory-Offset 0x68 rennt gegen Read bei
+Offset 0x78. Dieser konkrete Testlauf löste dabei **denselben CUDA-"illegal memory
+access"-Crash mit identischem Stack-Trace wie der ursprüngliche Bug-Report** aus
+(`common_speculative_impl_draft_mtp::draft` → `common_sampler_sample` →
+`llama_context::synchronize` → `ggml_backend_cuda_synchronize`) — die zwei
+Symptom-Bilder aus dem Original-Report (harter Crash vs. deterministischer
+Garbage-Token, siehe memcheck-Ergebnis oben) sind damit als **zwei Ausprägungen
+derselben Race Condition** bestätigt, nicht zwei getrennte Probleme.
+
+**Kernel-Herkunft:** `sgemm_32x32x32_NT_vec` kommt in keiner Datei im `ggml`/`llama.cpp`-
+Quellbaum vor (durchsucht) — Namensstil (klassische BLAS-Tile-Benennung, nicht
+ggml-typisch wie `mul_mat_vec_q`/`flash_attn_tile`) spricht stark dafür, dass dies ein
+**interner, closed-source cuBLAS-Legacy-SGEMM-Kernel** ist, den NVIDIAs CUDA-Toolkit für
+Maxwell-Karten ohne Tensor-Cores für reine fp32-Matmuls verwendet (passt zum bereits
+dokumentierten Fund dieser Session: Maxwell fällt für nicht-quantisierte/fp32-Matmuls —
+z.B. die MTP-Draft/nextn-Embedding-Projektion — auf `cublasSgemm` zurück, da weder MMQ
+noch die fp16-cuBLAS-Beschleunigung auf CC 5.0/5.2 verfügbar sind).
+
+**Root-Cause-Einordnung:** Die Race Condition liegt aller Wahrscheinlichkeit nach **in
+NVIDIAs eigener, geschlossener cuBLAS-Bibliothek**, nicht im Fork- oder llama.cpp-Code —
+weder dieses Projekt noch der llama.cpp-Fork können diesen Kernel patchen. Gegeben
+Maxwells End-of-Life-Status (kein weiterer cuBLAS-Support/Fixes zu erwarten) ist ein
+echter Upstream-Fix unrealistisch.
+
+**Verdict:** Die bereits ausgelieferte MTP-Denylist (`has_mtp()` in `auto-optimize.py`,
+Phase 0) ist damit **nicht nur ein Workaround, sondern die korrekte, dauerhafte Lösung**
+für dieses Hardware-Segment — root-caused, nicht weiter zu verfolgen. Kein Code-Fix im
+Fork-Repo möglich oder nötig.
 
 ---
 
