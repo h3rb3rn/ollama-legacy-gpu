@@ -300,12 +300,31 @@ def gpu_count_used() -> int:
         return 0
 
 
+# SAFETY DENYLIST (see BUG-hybrid-arch-degeneration.md, Finding 2): the MTP
+# draft path (common_speculative_impl_draft_mtp::draft) has been observed to
+# crash with a CUDA "illegal memory access" on Maxwell (Tesla M10), non-
+# deterministically across otherwise-identical GPUs, specifically for the
+# qwen3/qwen35 family. Since Phase 2 below benchmarks draft=2/4 (i.e.
+# actively exercises the crashing code path) to *discover* whether MTP
+# helps, a crash during the sweep itself can leave a model unusable before
+# the optimizer ever gets to cache the safe draft_num_predict=0 fallback.
+# Until the root cause is fixed (tracked as Phase 1 / compute-sanitizer work
+# in the bug report), families listed here are force-denied here regardless
+# of has_mtp()'s own detection, so Phase 2 is skipped and draft_num_predict=0
+# is cached directly. Confirmed via this fork's own testing: draft_num_predict=0
+# from the first request produces correct, non-crashing, non-degenerate
+# output on the same hardware that crashed with MTP enabled.
+MTP_CRASH_DENYLIST_ARCH_SUBSTRINGS = ("qwen3", "qwen35")
+
+
 def has_mtp(model: str) -> bool:
     """Heuristic: qwen3.x models typically have built-in MTP."""
     info = api("POST", "/api/show", {"model": model}, timeout=30)
     if not info:
         return False
     arch = info.get("details", {}).get("family", "").lower()
+    if any(s in arch for s in MTP_CRASH_DENYLIST_ARCH_SUBSTRINGS):
+        return False
     return "qwen3" in arch or "qwen35" in arch
 
 

@@ -80,8 +80,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-${{ needs.resolve-version.outputs.short }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-latest
-          cache-from: type=gha,scope=cuda12-maxwell-v2
-          cache-to:   type=gha,scope=cuda12-maxwell-v2,mode=max
+          cache-from: type=gha,scope=cuda12-maxwell-v3
+          cache-to:   type=gha,scope=cuda12-maxwell-v3,mode=max
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 12, CC 5.0/5.2 (Tesla M10/M60)
@@ -119,8 +119,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda11-legacy-${{ needs.resolve-version.outputs.short }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda11-legacy-latest
-          cache-from: type=gha,scope=cuda11-legacy
-          cache-to:   type=gha,scope=cuda11-legacy,mode=max
+          cache-from: type=gha,scope=cuda11-legacy-v2
+          cache-to:   type=gha,scope=cuda11-legacy-v2,mode=max
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 11, CC 3.7+5.0/5.2 (Tesla K80/M10/M60)
