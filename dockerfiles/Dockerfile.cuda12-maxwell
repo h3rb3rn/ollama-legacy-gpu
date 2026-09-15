@@ -32,10 +32,14 @@
 
 ARG CUDA12_VERSION=12.0.1
 ARG CMAKE_VERSION=3.31.7
-# Optional: use a custom llama.cpp fork instead of the version bundled with Ollama.
-# Set to "https://github.com/h3rb3rn/llama.cpp-legacy-gpu.git" to use our fork
-# with native greedy fill + bandwidth-weighted budgets (no Python patches needed).
-# Set to "" (empty) to use Ollama's bundled llama.cpp version (default).
+# NOT CURRENTLY WIRED IN for this Dockerfile — kept only because CI/README
+# still pass/document it and removing the ARG would break that invocation.
+# See the long comment near the cmake configure step below for why: Ollama's
+# own compat-patch step doesn't apply cleanly against this fork's diverged
+# history. This fork's actual fixes ship as Python patch scripts instead
+# (patch-llama-clip-margin.py, patch-llama-jinja-tojson.py,
+# patch-llama-tier-fitting.py), applied to Ollama's normally-fetched
+# llama.cpp, same as always.
 ARG LLAMA_CPP_FORK=""
 
 # ── Stage 1: Build toolchain ──────────────────────────────────────────────────
@@ -60,6 +64,8 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
     | tar -C /usr/local --strip-components=1 -xz
 
 COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
+COPY scripts/patch-llama-clip-margin.py   /tmp/patch-llama-clip-margin.py
+COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
 COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
@@ -76,23 +82,22 @@ RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
        | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
-# If LLAMA_CPP_FORK is set, clone it up front so the cmake configure step below
-# can point FetchContent at this local checkout instead of fetching Ollama's
-# pinned upstream llama.cpp version. Previously LLAMA_CPP_FORK was declared as
-# a build-arg (and documented in README.md/CI) but never actually threaded into
-# the cmake invocation — every cuda12-maxwell image ever built, including
-# "-latest", has silently used vanilla upstream llama.cpp + only the Python
-# patch-llama-tier-fitting.py patch, never this fork's native commits (greedy
-# layer-fill, the partial-fill fallback, or anything landed there since).
-RUN if [ -n "${LLAMA_CPP_FORK}" ]; then \
-      git clone --depth=1 "${LLAMA_CPP_FORK}" /src/llama-cpp-fork \
-      && echo "llama.cpp fork $(git -C /src/llama-cpp-fork rev-parse --short HEAD) cloned for FetchContent override"; \
-    fi
+# NOTE on LLAMA_CPP_FORK: this build-arg is declared (and documented in
+# README.md/CI) as a way to swap in this project's llama.cpp fork instead of
+# Ollama's pinned upstream version, but it is intentionally NOT wired into the
+# cmake configure step below. Attempted this directly via
+# -DFETCHCONTENT_SOURCE_DIR_LLAMA_CPP — it works at the CMake level, but
+# Ollama's own build applies a compat patch (llama/compat/001-llama-cpp-hooks.patch,
+# via cmake/apply-git-patches.cmake) targeted at its pinned upstream commit,
+# and that patch does not apply cleanly against our fork's diverged history
+# (fails on src/llama-model-loader.cpp). Fixing that needs either rebasing the
+# fork to track Ollama's pin closely, or making Ollama's compat-patch step
+# tolerant of a source override — out of scope for this pass. Until then, this
+# fork's fixes ship as additional Python patch scripts below (same mechanism
+# as patch-llama-tier-fitting.py), applied to Ollama's normally-fetched
+# llama.cpp copy, not by swapping the source tree wholesale.
 
 # Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
-# (FetchContent_Declare's target name is "llama_cpp", per the _deps/llama_cpp-src
-# directory it produces — FETCHCONTENT_SOURCE_DIR_<NAME> is the standard CMake
-# override to use a local checkout instead of fetching from GIT_REPOSITORY/TAG).
 # Separated from build so patches can be applied in between.
 RUN cmake -S llama/server \
           --preset llama_cuda_v12_linux \
@@ -100,13 +105,17 @@ RUN cmake -S llama/server \
           -DGGML_CUDA_FA=OFF \
           -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
           -DGGML_CPU_ALL_VARIANTS=ON \
-          $([ -n "${LLAMA_CPP_FORK}" ] && echo "-DFETCHCONTENT_SOURCE_DIR_LLAMA_CPP=/src/llama-cpp-fork") \
-    && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (idempotent no-op if the fork already has it natively)"
+    && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (no fork clone needed)"
 
-# Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.
-# When LLAMA_CPP_FORK is used, the fork already has these patches natively
-# so this step is a no-op (the patch guard prevents double-patching).
+# Step 2: apply this fork's Python patches to the fetched llama.cpp source.
+# - patch-llama-tier-fitting.py: GPU-tier-aware layer distribution (fit.cpp)
+# - patch-llama-clip-margin.py: reserves a CLIP/vision compute-buffer margin
+#   before layer fitting (BUG-hybrid-arch-degeneration.md, Finding 1)
+# - patch-llama-jinja-tojson.py: adds a missing tojson filter for undefined
+#   values so tool-calling chat templates don't crash llama-server at startup
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
+RUN python3 /tmp/patch-llama-clip-margin.py /src
+RUN python3 /tmp/patch-llama-jinja-tojson.py /src
 
 # Step 3: cmake build + install
 # NOTE: No --component filter → installs llama-server binary + CUDA libs.

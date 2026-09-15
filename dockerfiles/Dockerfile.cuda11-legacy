@@ -52,6 +52,8 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
     | tar -C /usr/local --strip-components=1 -xz
 
 COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
+COPY scripts/patch-llama-clip-margin.py   /tmp/patch-llama-clip-margin.py
+COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
 COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
@@ -100,6 +102,8 @@ RUN cmake -S llama/server \
 # When LLAMA_CPP_FORK is used, the fork already has these patches natively
 # so this step is a no-op (the patch guard prevents double-patching).
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
+RUN python3 /tmp/patch-llama-clip-margin.py /src
+RUN python3 /tmp/patch-llama-jinja-tojson.py /src
 
 # Step 3: cmake build + install
 # NOTE: No --component filter → installs llama-server binary + CUDA libs.
