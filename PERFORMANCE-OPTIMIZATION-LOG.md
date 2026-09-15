@@ -197,3 +197,28 @@ bleibt bestehen.**
 nicht nutzbar — separates, kleines Kompatibilitäts-Ticket, nicht weiter verfolgt (nicht
 Teil des ursprünglichen Bugs, mllama ist eine strukturell andere Vision-Integration als
 das CLIP/mtmd-Modell, das dieser Fork sonst überall sieht).
+
+---
+
+## Phase 4 (Teil 1) — N02-M60-Flotte mit validiertem Fix-Set neu aufgebaut
+
+**Status: abgeschlossen (N02-M60), N04-RTX noch offen**
+
+Mit expliziter Freigabe des Users ("nimm die GPUs wie und so viel du brauchst") wurden
+die 9 alten Stock-Ollama-Container (`ollama/ollama:0.24.0`, liefen dort seit 44h als
+A/B-Vergleichsbaseline laut Bug-Report) entfernt und durch eine vollständige
+12-GPU-Single-Instanz-Flotte (`ollama-m60-gpu0` … `gpu11`, Port 11434–11445, je 1 Tesla-
+M60-Die) mit dem Image `cuda12-maxwell-fa-test` und dem vollen validierten Fix-Set
+ersetzt (Thread-Fix, MTP-Denylist, `LLAMA_ARG_MMPROJ_OFFLOAD=false`, FA=ON —
+Single-GPU-Scope, siehe Phase-2-Einschränkung oben). Alle 12 Container healthy,
+End-to-End mit dem Original-Bug-Modell auf GPU0 verifiziert (HTTP 200, korrekter Output).
+
+**Bewusst NICHT wiederhergestellt:** der alte 12-GPU-Pool-Container
+(`ollama-m60-pool`) — siehe Phase-2-Nachtrag: FA=ON ist für große Multi-GPU-Pools aktuell
+nicht sicher. Ein Pool-Deployment für N02-M60 sollte, falls gewünscht, vorerst mit
+FA=OFF aufgesetzt werden (analog zur N11-M10-Multi-GPU-Test-Compose), nicht mit dem
+`-fa-test`-Image.
+
+**N04-RTX:** noch nicht angefasst — laut Plan erst nach Abschluss der übrigen Phasen, da
+dieser Host den `OLLAMA_FAST_GPU_DEVICES`/`selectGPUPool()`-Mechanismus aktiv nutzt und
+eine andere, sorgfältigere Anpassung braucht als das einfache Ersetzen auf N02-M60.
