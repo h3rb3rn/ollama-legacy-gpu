@@ -27,6 +27,15 @@ services:
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
       - LLAMA_ARG_THREADS=4
       - LLAMA_ARG_THREADS_BATCH=4
+      # Vision-capable models (Qwen3.5/3.6 etc.) starve GPU layer offload on a
+      # single 8 GiB M10 otherwise: mtmd's own worst-case mmproj memory
+      # estimate (~5.4 GiB) leaves too little headroom for even one decoder
+      # layer. Keeping the vision tower on CPU instead frees the GPU almost
+      # entirely for the text model. Confirmed on N11-M10: 0/34 -> 34/34
+      # layers offloaded, correct output, ~5.7 tok/s. Irrelevant for
+      # text-only models (SmolLM3 etc.) and safe to leave on for the 4-GPU
+      # pool, which already has enough combined VRAM (Finding 3).
+      - LLAMA_ARG_MMPROJ_OFFLOAD=false
     deploy:
       resources:
         reservations:
@@ -65,6 +74,15 @@ services:
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
       - LLAMA_ARG_THREADS=4
       - LLAMA_ARG_THREADS_BATCH=4
+      # Vision-capable models (Qwen3.5/3.6 etc.) starve GPU layer offload on a
+      # single 8 GiB M10 otherwise: mtmd's own worst-case mmproj memory
+      # estimate (~5.4 GiB) leaves too little headroom for even one decoder
+      # layer. Keeping the vision tower on CPU instead frees the GPU almost
+      # entirely for the text model. Confirmed on N11-M10: 0/34 -> 34/34
+      # layers offloaded, correct output, ~5.7 tok/s. Irrelevant for
+      # text-only models (SmolLM3 etc.) and safe to leave on for the 4-GPU
+      # pool, which already has enough combined VRAM (Finding 3).
+      - LLAMA_ARG_MMPROJ_OFFLOAD=false
     deploy:
       resources:
         reservations:
@@ -103,6 +121,15 @@ services:
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
       - LLAMA_ARG_THREADS=4
       - LLAMA_ARG_THREADS_BATCH=4
+      # Vision-capable models (Qwen3.5/3.6 etc.) starve GPU layer offload on a
+      # single 8 GiB M10 otherwise: mtmd's own worst-case mmproj memory
+      # estimate (~5.4 GiB) leaves too little headroom for even one decoder
+      # layer. Keeping the vision tower on CPU instead frees the GPU almost
+      # entirely for the text model. Confirmed on N11-M10: 0/34 -> 34/34
+      # layers offloaded, correct output, ~5.7 tok/s. Irrelevant for
+      # text-only models (SmolLM3 etc.) and safe to leave on for the 4-GPU
+      # pool, which already has enough combined VRAM (Finding 3).
+      - LLAMA_ARG_MMPROJ_OFFLOAD=false
     deploy:
       resources:
         reservations:
@@ -141,6 +168,15 @@ services:
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
       - LLAMA_ARG_THREADS=4
       - LLAMA_ARG_THREADS_BATCH=4
+      # Vision-capable models (Qwen3.5/3.6 etc.) starve GPU layer offload on a
+      # single 8 GiB M10 otherwise: mtmd's own worst-case mmproj memory
+      # estimate (~5.4 GiB) leaves too little headroom for even one decoder
+      # layer. Keeping the vision tower on CPU instead frees the GPU almost
+      # entirely for the text model. Confirmed on N11-M10: 0/34 -> 34/34
+      # layers offloaded, correct output, ~5.7 tok/s. Irrelevant for
+      # text-only models (SmolLM3 etc.) and safe to leave on for the 4-GPU
+      # pool, which already has enough combined VRAM (Finding 3).
+      - LLAMA_ARG_MMPROJ_OFFLOAD=false
     deploy:
       resources:
         reservations:

@@ -37,9 +37,8 @@ ARG CMAKE_VERSION=3.31.7
 # See the long comment near the cmake configure step below for why: Ollama's
 # own compat-patch step doesn't apply cleanly against this fork's diverged
 # history. This fork's actual fixes ship as Python patch scripts instead
-# (patch-llama-clip-margin.py, patch-llama-jinja-tojson.py,
-# patch-llama-tier-fitting.py), applied to Ollama's normally-fetched
-# llama.cpp, same as always.
+# (patch-llama-jinja-tojson.py, patch-llama-tier-fitting.py), applied to
+# Ollama's normally-fetched llama.cpp, same as always.
 ARG LLAMA_CPP_FORK=""
 
 # ── Stage 1: Build toolchain ──────────────────────────────────────────────────
@@ -64,7 +63,6 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
     | tar -C /usr/local --strip-components=1 -xz
 
 COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
-COPY scripts/patch-llama-clip-margin.py   /tmp/patch-llama-clip-margin.py
 COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
@@ -109,12 +107,23 @@ RUN cmake -S llama/server \
 
 # Step 2: apply this fork's Python patches to the fetched llama.cpp source.
 # - patch-llama-tier-fitting.py: GPU-tier-aware layer distribution (fit.cpp)
-# - patch-llama-clip-margin.py: reserves a CLIP/vision compute-buffer margin
-#   before layer fitting (BUG-hybrid-arch-degeneration.md, Finding 1)
 # - patch-llama-jinja-tojson.py: adds a missing tojson filter for undefined
 #   values so tool-calling chat templates don't crash llama-server at startup
+#
+# NOTE on vision-model VRAM starvation (BUG-hybrid-arch-degeneration.md,
+# Finding 1): this is NOT a fit.cpp bug — upstream llama-server already adds
+# mtmd's own worst-case mmproj memory estimate to fit_params_target before
+# fitting (tools/server/server-context.cpp, "[mtmd] estimated worst-case
+# memory usage..."). On an 8 GiB Tesla M10 that worst-case reservation alone
+# (~5.4 GiB for Qwen3.5/3.6's vision tower) can leave too little headroom for
+# even one decoder layer. The actual fix is a deployment-time flag, not a
+# patch: set LLAMA_ARG_MMPROJ_OFFLOAD=false (keeps CLIP on CPU, confirmed via
+# testing on N11-M10: 34/34 layers offloaded, correct output, ~5.7 tok/s,
+# vs. 0/34 with mmproj on GPU) for single-GPU Maxwell deployments of
+# vision-capable models. A CLIP-margin patch was tried here first and
+# reverted — it was redundant with (and briefly stacked on top of) the
+# upstream mechanism above, which was already correct.
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
-RUN python3 /tmp/patch-llama-clip-margin.py /src
 RUN python3 /tmp/patch-llama-jinja-tojson.py /src
 
 # Step 3: cmake build + install

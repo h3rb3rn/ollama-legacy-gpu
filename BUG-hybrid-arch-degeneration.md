@@ -464,3 +464,63 @@ and risk tolerance.**
   `common/common.cpp:1196-1210`) + the hybrid-vs-vision-capable confound test matrix.
 - Phase 3.3: re-run the M60-pool repro with explicit layer-offload logging (needs
   N02-M60/N04-RTX access, out of this session's N11-M10 scope).
+
+---
+
+## 2026-09-15 update: Finding 1 corrected — it was never a fit.cpp bug, and it's fixed
+
+Follow-up to the Phase 3 work above. Wrote and built a `common/fit.cpp` CLIP-margin
+patch (inflating `fit_params_target[0]` by a fixed estimate before fitting, as
+Finding 1 originally proposed) and tested it on N11-M10. **It had zero effect on the
+outcome** — still 0/34 layers offloaded. Digging into why:
+
+`tools/server/server-context.cpp` (upstream llama.cpp, unmodified by this fork)
+**already** does exactly what the patch was trying to add: it calls
+`mtmd_get_memory_usage()` to get mmproj's own worst-case memory estimate, logs it
+(`"[mtmd] estimated worst-case memory usage of mmproj is %.2f MiB"`), and adds it
+directly to `params_base.fit_params_target[i]` per-device — **before** `common_init_result`
+/ `common_fit_params` (the code Finding 1 targeted) ever runs. Confirmed via a
+diagnostic build that logged `fit_params_target[0]` at exactly the point Finding 1's
+patch would have modified it: **already 7028 MiB**, entirely from this pre-existing
+upstream mechanism (mtmd's ~5.4 GiB worst-case estimate for `qwen3.5:4b`'s vision tower,
+plus base overhead) — before the patch's own addition ever ran. Adding another ~4.75 GiB
+on top just made an already-negative budget more negative; the CLIP-margin patch has
+been **reverted** (both the llama.cpp-fork commit and the Ollama-fork's Python patch
+script), since it was redundant with, and briefly stacked on top of, upstream's own
+already-correct accounting.
+
+**So Finding 1's actual mechanism was right (vision tower reservation starves GPU
+layers on a tight single 8 GiB card) but the diagnosis of *where* the gap was wrong**
+— there's no missing CLIP-awareness in the fitting probe. The real situation: mtmd's
+worst-case estimate (~5.4 GiB) plus base overhead genuinely doesn't leave enough of an
+8 GiB M10's VRAM for even one `qwen3.5:4b` decoder layer (needs ~2 GiB minimum) once
+the vision tower is reserved on the same device.
+
+### The actual, confirmed fix: `LLAMA_ARG_MMPROJ_OFFLOAD=false`
+
+llama-server already exposes `--mmproj-offload` / `--no-mmproj-offload`
+(env: `LLAMA_ARG_MMPROJ_OFFLOAD`, default enabled) to control whether the multimodal
+projector runs on GPU at all. Setting it to `false` keeps CLIP on CPU, which removes
+its VRAM reservation entirely instead of trying to shrink or reallocate it. Tested on
+N11-M10 (GPU3, `qwen3.5:4b`, single Tesla M10):
+
+| Config | GPU layers | Output | Gen. speed |
+|---|---|---|---|
+| `mmproj` on GPU (default) | 0/34 | N/A (CPU-only) | 1.2-4.2 tok/s (CPU-bound) |
+| `mmproj` on CPU (`LLAMA_ARG_MMPROJ_OFFLOAD=false`) | **34/34** | correct, coherent, non-degenerate (exact bug-report repro prompt) | **5.7 tok/s** |
+
+This is now the fastest single-GPU M10 result recorded this session — faster than the
+CPU-fallback case by ~35-80%, with full GPU residency and no quality loss. It's a pure
+deployment-config fix, no code changes needed. Added to
+`compose/docker-compose.n11-single-test.yml` as the default for single-GPU Maxwell
+test deployments. Irrelevant for text-only models (no mmproj to offload) and not
+needed on the 4-GPU pool (Finding 3 already showed `qwen3.6:35b` reaching 41/42 layers
+with mmproj on GPU there — combined 32 GiB is enough headroom even for the worst-case
+estimate).
+
+**Remaining open question**: does keeping CLIP on CPU meaningfully slow down actual
+image/vision inference requests (as opposed to the text-only benchmark used here)? Not
+yet tested — this session only exercised text prompts. Worth a follow-up test with a
+real multimodal request before treating this as a universal default for any
+vision-capable deployment, as opposed to specifically for text-heavy single-GPU
+Maxwell nodes where vision is a secondary/rare use case.
