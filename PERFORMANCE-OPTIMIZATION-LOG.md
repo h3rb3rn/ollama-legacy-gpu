@@ -158,3 +158,42 @@ Multi-GPU-Pools bleiben FA=OFF bis das oben beschriebene Muster separat untersuc
 neuer, eigenständiger Untersuchungspunkt, nicht Teil des ursprünglichen Bugs.
 Rollout-Empfehlung: `-fa-test` → `-latest` nur mit Single-GPU-Scope, nach
 Leichttest auf GPU1/GPU0 (N11-M10-Prioritätsreihenfolge).
+
+---
+
+## Phase 3 — Hybrid-vs-Vision-Konfundierung trennen
+
+**Status: teilweise abgeschlossen — Vision-Dense-Fall bestätigt, Hybrid-Text-only-Fall blockiert**
+
+**Blocker text-only-Hybrid-Modell:** `hf.co/...`-Pulls schlagen aktuell mit
+`Error: pull model manifest: realm host "huggingface.co" does not match original host "hf.co"`
+fehl — reproduzierbar für neue (nicht bereits lokal gecachte) Repos, bereits gecachte
+Repos (z.B. `sovereign-judge-olmo31-32b`, vorher gepullt) funktionieren weiter. Kein
+Mamba/Jamba/reines-SSM-Modell in der gesamten Flotte (N11-M10, N04-RTX, N02-M60) bereits
+lokal vorhanden. Dieser Teil von Phase 3 bleibt offen, bis das Registry-Problem
+(vermutlich Ollama-Versions-Regression, unabhängig von diesem Fork) behoben ist.
+
+**Vision-Dense-Fall (kein SSM, aber Vision) — getestet:**
+
+| Modell | Vision-Tower-Größe (mtmd worst-case) | Layer-Offload (mmproj auf GPU, Default) |
+|---|---|---|
+| `qwen3.5:4b` (zum Vergleich, hybrid+vision) | ~5,4 GiB | 0/34 |
+| `llama3.2-vision:latest` | — | **lädt gar nicht** (`unknown model architecture: 'mllama'` — dieser Fork-Build unterstützt die mllama-Architektur nicht, unabhängig von VRAM) |
+| `minicpm-v:latest` (dense+vision) | ~1,05 GiB | **25/29** (kein 0-Layer-Fall) |
+
+**Ergebnis:** Kein sauberer Binär-Vergleich möglich (kein zweites hybrides Textmodell
+verfügbar), aber `minicpm-v` liefert trotzdem ein aussagekräftiges Teilergebnis: **ein
+dense (nicht-hybrides) Modell mit Vision-Fähigkeit zeigt dasselbe VRAM-Konkurrenz-Muster
+wie Qwen3.5 — nur proportional zur tatsächlichen Encoder-Größe.** MiniCPM-Vs Encoder
+(~1 GiB) ist klein genug, um auf einer 8-GiB-Karte kein 0-Layer-Ergebnis zu erzwingen;
+Qwen3.5s Encoder (~5,4 GiB) ist es nicht. Das stützt die Kernthese aus Finding 1 (VRAM-
+Konkurrenz durch die Vision-Komponente, nicht die Hybrid-/SSM-Architektur) — allerdings
+als graduellen, größenabhängigen Effekt statt als sauberes Ja/Nein, und ohne den fehlenden
+Hybrid-Text-only-Fall bleibt ein Restzweifel, ob Hybrid-Architektur einen (kleineren,
+zusätzlichen) Effekt hat. **Nicht abschließend bewiesen, aber die vorherrschende Erklärung
+bleibt bestehen.**
+
+**Nebenfund:** `llama3.2-vision` (mllama-Architektur) ist mit diesem Fork-Build generell
+nicht nutzbar — separates, kleines Kompatibilitäts-Ticket, nicht weiter verfolgt (nicht
+Teil des ursprünglichen Bugs, mllama ist eine strukturell andere Vision-Integration als
+das CLIP/mtmd-Modell, das dieser Fork sonst überall sieht).
