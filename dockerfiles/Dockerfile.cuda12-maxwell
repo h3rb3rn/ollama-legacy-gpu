@@ -4,7 +4,14 @@
 # CUDA 12.0.1 — lowest CUDA 12 release, broadest M10/M60 driver compatibility
 #
 # Using CUDA 12.0.1 instead of 12.5/12.8 so older drivers remain compatible.
-# GGML_CUDA_FA=OFF: Flash Attention requires CC >= 8.0.
+# GGML_CUDA_FA=OFF (currently): this comment previously claimed "Flash
+# Attention requires CC >= 8.0" — that is factually wrong for ggml's
+# non-tensor-core TILE kernel (real, dispatches for CC<700, explicitly
+# supports head_dim=256 per ggml-cuda/fattn-tile.cu — see
+# BUG-hybrid-arch-degeneration.md's 2026-09-15 update in the parent repo).
+# FA is being kept off by default until a gated rebuild-and-verify pass on
+# real Maxwell hardware confirms correctness (tracked as that bug report's
+# Phase 2) — this is a "not yet verified", not a "doesn't work", situation.
 #
 # IMPORTANT — -real instead of -virtual for Maxwell (CC 5.0/5.2):
 #   -virtual targets generate PTX (intermediate code) that the CUDA driver
@@ -69,8 +76,23 @@ RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
        | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
+# If LLAMA_CPP_FORK is set, clone it up front so the cmake configure step below
+# can point FetchContent at this local checkout instead of fetching Ollama's
+# pinned upstream llama.cpp version. Previously LLAMA_CPP_FORK was declared as
+# a build-arg (and documented in README.md/CI) but never actually threaded into
+# the cmake invocation — every cuda12-maxwell image ever built, including
+# "-latest", has silently used vanilla upstream llama.cpp + only the Python
+# patch-llama-tier-fitting.py patch, never this fork's native commits (greedy
+# layer-fill, the partial-fill fallback, or anything landed there since).
+RUN if [ -n "${LLAMA_CPP_FORK}" ]; then \
+      git clone --depth=1 "${LLAMA_CPP_FORK}" /src/llama-cpp-fork \
+      && echo "llama.cpp fork $(git -C /src/llama-cpp-fork rev-parse --short HEAD) cloned for FetchContent override"; \
+    fi
+
 # Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
-# If LLAMA_CPP_FORK is set, override the bundled version with our fork.
+# (FetchContent_Declare's target name is "llama_cpp", per the _deps/llama_cpp-src
+# directory it produces — FETCHCONTENT_SOURCE_DIR_<NAME> is the standard CMake
+# override to use a local checkout instead of fetching from GIT_REPOSITORY/TAG).
 # Separated from build so patches can be applied in between.
 RUN cmake -S llama/server \
           --preset llama_cuda_v12_linux \
@@ -78,7 +100,8 @@ RUN cmake -S llama/server \
           -DGGML_CUDA_FA=OFF \
           -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
           -DGGML_CPU_ALL_VARIANTS=ON \
-    && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (no fork clone needed)"
+          $([ -n "${LLAMA_CPP_FORK}" ] && echo "-DFETCHCONTENT_SOURCE_DIR_LLAMA_CPP=/src/llama-cpp-fork") \
+    && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (idempotent no-op if the fork already has it natively)"
 
 # Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.
 # When LLAMA_CPP_FORK is used, the fork already has these patches natively
