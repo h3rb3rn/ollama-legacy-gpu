@@ -1,9 +1,12 @@
 # Bug Report: Hybrid/Recurrent-Architecture Models Degenerate on Maxwell (cuda12-maxwell fork)
 
-**Status:** Open — but see "2026-09-14 update" at the bottom: strong evidence the root
-cause is NOT the SSM/Mamba kernel at all, but an unconditional vision (CLIP) compute-buffer
-reservation combined with an MTP speculative-decoding crash. Re-scope before further
-kernel-level bisection work.
+**Status:** **RESOLVED** as of 2026-09-15 (see bottom of file) — the exact original repro
+model (`moe-expert-coder-4b-v2`) was re-run on real Tesla M60 hardware (N02-M60) with the
+accumulated fixes (FA rebuild + `LLAMA_ARG_MMPROJ_OFFLOAD=false` + MTP fix) and produced
+coherent, non-repeating output at 20.48 tok/s with full 33/33-layer GPU residency. Root
+cause was never the SSM/Mamba kernel — see the full timeline below for how the diagnosis
+evolved (CLIP compute-buffer starvation → wrong fix tried and reverted → real fix found
+→ confirmed fixed on the original hardware+model combination).
 **Severity:** High — makes the entire Qwen3.5/3.8 hybrid-attention model family unusable
 for inference quality on the M10/M60 Tesla fleet (~16 physical GPUs across N02-M60,
 N04-RTX, N11-M10), while dense-transformer models on the same hardware are unaffected.
@@ -524,3 +527,63 @@ yet tested — this session only exercised text prompts. Worth a follow-up test 
 real multimodal request before treating this as a universal default for any
 vision-capable deployment, as opposed to specifically for text-heavy single-GPU
 Maxwell nodes where vision is a secondary/rare use case.
+
+---
+
+## 2026-09-15 (cont.) — RESOLVED: original repro re-run on real M60 hardware
+
+Context: a follow-up optimization campaign (`PERFORMANCE-OPTIMIZATION-LOG.md`) rebuilt
+the fork with `GGML_CUDA_FA=ON` (Phase 2) after confirming via source read that the
+TILE kernel explicitly supports head_dim=256 (Qwen3.5/3.6's configuration). Correctness
+was verified on N11-M10 (Tesla M10) across three model classes — all passed, no crashes,
+no Xid errors, coherent output, compute buffer shrank to 140-494 MiB matching the
+CHANGELOG's historical claim.
+
+With N02-M60 (the **original** host this bug was first reported on) made fully available
+for testing, the **exact original repro model** (`moe-expert-coder-4b-v2`, same GGUF blob
+hash as the original report) was re-run on a single Tesla M60 die (GPU index 0) with the
+full accumulated fix set:
+
+- `GGML_CUDA_FA=ON` (Phase 2 rebuild, `cuda12-maxwell-fa-test` tag)
+- `LLAMA_ARG_MMPROJ_OFFLOAD=false` (keeps CLIP off GPU — the actual Finding-1 fix)
+- MTP fix active (the shipped image's `has_mtp()` denylist forces `draft_num_predict=0`
+  for the `qwen35` family this model belongs to — no explicit override needed, this is
+  the real default behavior)
+- Same prompt, same `temperature=0.2, seed=42` as the original report
+
+**Result:** `load_tensors: offloaded 33/33 layers to GPU`, `flash_attn = enabled`,
+**20.48 tok/s**, and — critically — **coherent, non-repeating output**:
+
+```
+[IMPLEMENTING CORRECTNESS VERDICT]
+The following lock-free ring buffer implementation is correct under the conditions that:
+1. The buffer size is a power of 2 (enables bitwise modulo)
+2. The producer and consumer are the only threads accessing the buffer
+3. std::atomic_flag is used correctly with release/acquire semantics
+4. The head and tail pointers are properly initialized and updated
+[... continues as one coherent, non-repeating analysis, cut off by token limit ...]
+```
+
+Note the response still opens with the same `[IMPLEMENTING CORRECTNESS VERDICT]` header
+seen in the original report's degenerate output — that phrasing is apparently a stable
+stylistic trait of this specific fine-tune (consistent with its likely role as a
+"judge"/verifier expert in a larger MoE-expert ensemble, per this deployment's naming
+conventions, rather than a raw code generator) — **not** a sign of the bug persisting.
+The defining symptom of the original report — the same ~4-line block repeating verbatim
+until the token cap — is completely gone.
+
+**This closes the investigation.** None of the three ruled-out/re-scoped mechanisms
+(SSM/Mamba kernel, GPU pooling, this fork's layer-fitting patches) were ever the cause.
+The real, now-confirmed cause was two independent, compounding issues, both fixed by
+configuration/build changes rather than any change to the SSM code path:
+
+1. **CLIP/vision-tower GPU memory competing with the text decoder** for VRAM on
+   small-VRAM Maxwell cards (fixed: `LLAMA_ARG_MMPROJ_OFFLOAD=false`).
+2. **MTP speculative decoding instability** for the `qwen3`/`qwen35` family on Maxwell
+   (fixed: denylisted by default in `scripts/auto-optimize.py`).
+
+Flash Attention (`GGML_CUDA_FA=ON`) was not strictly required to fix the degenerate
+output (the mmproj-offload fix alone already resolved it on N11-M10 in the earlier test),
+but is validated as safe and beneficial (smaller compute buffers, full layer offload
+alongside CLIP staying off-GPU) and is bundled into the same "known-good" configuration
+going forward.
