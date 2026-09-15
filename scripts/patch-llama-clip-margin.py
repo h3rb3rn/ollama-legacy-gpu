@@ -30,6 +30,7 @@ Usage (inside Docker builder, after cmake configure, before cmake build):
     python3 scripts/patch-llama-clip-margin.py <ollama-src-root>
 """
 
+import re
 import sys
 import subprocess
 from pathlib import Path
@@ -37,28 +38,10 @@ from pathlib import Path
 PATCH_GUARD = "// [OLLAMA_CLIP_MARGIN_v1]"
 SOURCE_FILE = "common/common.cpp"
 
-TARGET = (
-    '        LOG_INF("%s: fitting params to device memory ...\\n", __func__);\n'
-    '        LOG_INF("%s: (for bugs during this step try to reproduce them with -fit off, '
-    'or provide --verbose logs if the bug only occurs with -fit on)\\n", __func__);\n'
-    "        common_fit_params(params.model.path.c_str(), &mparams, &cparams,\n"
-)
-
-REPLACEMENT = (
-    '        LOG_INF("%s: fitting params to device memory ...\\n", __func__);\n'
-    '        LOG_INF("%s: (for bugs during this step try to reproduce them with -fit off, '
-    'or provide --verbose logs if the bug only occurs with -fit on)\\n", __func__);\n'
-    f"        {PATCH_GUARD}\n"
-    "        if (!params.mmproj.path.empty() && !params.no_mmproj && params.mmproj_use_gpu\n"
-    "                && !params.fit_params_target.empty()) {\n"
-    "            constexpr size_t CLIP_COMPUTE_BUFFER_MARGIN = 4864ull * 1024 * 1024; // ~4.75 GiB\n"
-    "            params.fit_params_target[0] += CLIP_COMPUTE_BUFFER_MARGIN;\n"
-    '            LOG_INF("%s: vision model detected (mmproj set) - reserving an extra %zu MiB "\n'
-    '                    "on device 0 for the CLIP compute buffer before fitting\\n",\n'
-    "                    __func__, CLIP_COMPUTE_BUFFER_MARGIN / (1024 * 1024));\n"
-    "        }\n"
-    "        common_fit_params(params.model.path.c_str(), &mparams, &cparams,\n"
-)
+# Anchor on just the unique call-start substring, not the preceding LOG_INF
+# lines (their exact wrapping/formatting can differ across llama.cpp
+# versions/forks — this call signature is far more stable).
+ANCHOR = "common_fit_params(params.model.path.c_str(), &mparams, &cparams,"
 
 
 def find_common_cpp(ollama_root: Path) -> Path | None:
@@ -88,11 +71,31 @@ def patch(path: Path) -> bool:
         print(f"  Already patched: {path}")
         return True
 
-    if TARGET not in content:
-        print(f"  Marker not found in {path} — layout may have changed upstream", file=sys.stderr)
+    idx = content.find(ANCHOR)
+    if idx == -1:
+        print(f"  Anchor not found in {path} — layout may have changed upstream", file=sys.stderr)
         return False
 
-    content = content.replace(TARGET, REPLACEMENT, 1)
+    # Indent = whitespace from the start of the anchor's line.
+    line_start = content.rfind("\n", 0, idx) + 1
+    indent = content[line_start:idx]
+    if not re.fullmatch(r"[ \t]*", indent):
+        # Anchor wasn't at the start of its line (unexpected) — bail out safely.
+        print(f"  Anchor found but not at line start in {path} — refusing to guess indent", file=sys.stderr)
+        return False
+
+    injected = (
+        f"{indent}{PATCH_GUARD}\n"
+        f"{indent}if (!params.mmproj.path.empty() && !params.no_mmproj && params.mmproj_use_gpu\n"
+        f"{indent}        && !params.fit_params_target.empty()) {{\n"
+        f"{indent}    constexpr size_t CLIP_COMPUTE_BUFFER_MARGIN = 4864ull * 1024 * 1024; // ~4.75 GiB\n"
+        f"{indent}    params.fit_params_target[0] += CLIP_COMPUTE_BUFFER_MARGIN;\n"
+        f'{indent}    LOG_INF("%s: vision model detected (mmproj set) - reserving an extra %zu MiB "\n'
+        f'{indent}            "on device 0 for the CLIP compute buffer before fitting\\n",\n'
+        f"{indent}            __func__, CLIP_COMPUTE_BUFFER_MARGIN / (1024 * 1024));\n"
+        f"{indent}}}\n"
+    )
+    content = content[:line_start] + injected + content[line_start:]
     path.write_text(content)
     print(f"  CLIP compute-buffer margin patch applied to {path.name}")
     return True
