@@ -35,7 +35,7 @@ import sys
 import subprocess
 from pathlib import Path
 
-PATCH_GUARD = "// [OLLAMA_CLIP_MARGIN_v1]"
+PATCH_GUARD = "// [OLLAMA_CLIP_MARGIN_v2_DIAG]"
 SOURCE_FILE = "common/common.cpp"
 
 # Anchor on just the unique call-start substring, not the preceding LOG_INF
@@ -84,15 +84,15 @@ def patch(path: Path) -> bool:
         print(f"  Anchor found but not at line start in {path} — refusing to guess indent", file=sys.stderr)
         return False
 
+    # DIAGNOSTIC BUILD: log the pre-existing margin/free values without adding
+    # anything, to determine ground truth before tuning the actual margin.
     injected = (
         f"{indent}{PATCH_GUARD}\n"
-        f"{indent}if (!params.mmproj.path.empty() && !params.no_mmproj && params.mmproj_use_gpu\n"
-        f"{indent}        && !params.fit_params_target.empty()) {{\n"
-        f"{indent}    constexpr size_t CLIP_COMPUTE_BUFFER_MARGIN = 4864ull * 1024 * 1024; // ~4.75 GiB\n"
-        f"{indent}    params.fit_params_target[0] += CLIP_COMPUTE_BUFFER_MARGIN;\n"
-        f'{indent}    LOG_INF("%s: vision model detected (mmproj set) - reserving an extra %zu MiB "\n'
-        f'{indent}            "on device 0 for the CLIP compute buffer before fitting\\n",\n'
-        f"{indent}            __func__, CLIP_COMPUTE_BUFFER_MARGIN / (1024 * 1024));\n"
+        f"{indent}if (!params.mmproj.path.empty()) {{\n"
+        f'{indent}    LOG_INF("%s: [DIAG] mmproj set, no_mmproj=%d, mmproj_use_gpu=%d, '
+        f'fit_params_target[0]=%zu MiB (BEFORE any patch addition)\\n",\n'
+        f"{indent}            __func__, (int)params.no_mmproj, (int)params.mmproj_use_gpu,\n"
+        f"{indent}            params.fit_params_target.empty() ? (size_t)0 : params.fit_params_target[0] / (1024 * 1024));\n"
         f"{indent}}}\n"
     )
     content = content[:line_start] + injected + content[line_start:]
