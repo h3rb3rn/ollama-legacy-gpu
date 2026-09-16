@@ -1,16 +1,17 @@
 # Bug Report: Hybrid/Recurrent-Architecture Models Degenerate on Maxwell (cuda12-maxwell fork)
 
-**Status:** **PARTIALLY RESOLVED**, Finding 2 reopened 2026-09-16 (see bottom of file).
-The exact original repro model (`moe-expert-coder-4b-v2`) was re-run on real Tesla M60
-hardware (N02-M60) with the accumulated fixes (FA rebuild + `LLAMA_ARG_MMPROJ_OFFLOAD=false`
-+ MTP fix) and produced coherent, non-repeating output at 20.48 tok/s with full
-33/33-layer GPU residency — that specific repro stays fixed. Root cause was never the
-SSM/Mamba kernel — see the full timeline below for how the diagnosis evolved (CLIP
-compute-buffer starvation → wrong fix tried and reverted → real fix found → confirmed
-fixed on the original hardware+model combination). However, the MTP-crash denylist
-(Finding 2) turned out to have a coverage gap: `qwen3.8:27b` crashes on first load with
-the identical MTP race-condition signature, and no config-level workaround exists —
-see "2026-09-16 update" at the bottom for the reopened finding.
+**Status:** **RESOLVED** as of 2026-09-16 (see bottom of file). The exact original repro
+model (`moe-expert-coder-4b-v2`) was re-run on real Tesla M60 hardware (N02-M60) with
+the accumulated fixes (FA rebuild + `LLAMA_ARG_MMPROJ_OFFLOAD=false` + MTP fix) and
+produced coherent, non-repeating output at 20.48 tok/s with full 33/33-layer GPU
+residency. Root cause was never the SSM/Mamba kernel — see the full timeline below for
+how the diagnosis evolved (CLIP compute-buffer starvation → wrong fix tried and
+reverted → real fix found → confirmed fixed on the original hardware+model
+combination). The MTP-crash denylist (Finding 2) was briefly reopened on 2026-09-16
+after `qwen3.8:27b` crashed despite it, then re-closed the same day once the actual
+controllable lever (`draft_num_predict`, not `--spec-type`) and a confirmed working
+fix (`draft_num_predict=0`, e.g. via the existing `qwen3.8:27b-nospec` tag) were
+identified — see the two 2026-09-16 updates at the bottom.
 **Severity:** High — makes the entire Qwen3.5/3.8 hybrid-attention model family unusable
 for inference quality on the M10/M60 Tesla fleet (~16 physical GPUs across N02-M60,
 N04-RTX, N11-M10), while dense-transformer models on the same hardware are unaffected.
@@ -659,11 +660,57 @@ process, and a hung `/api/generate` request against an unrelated, previously-wor
 model). A plain `docker restart` fully recovered it — worth knowing as an operational
 runbook step after any MTP crash on this fork, not just a curiosity.
 
-**Status: reopened.** `qwen3.8:27b` is currently **unusable** on this fork — every
-load attempt crashes, with no known config-level workaround. Finding 2's underlying
-cuBLAS race-condition diagnosis stands unchanged; what's corrected here is only the
-claim that the Phase 0 denylist provides complete protection. It protects the
-benchmark sweep, not first-load native MTP auto-detection. Real fix would need either
-an MTP-stripped model variant (as already done for `qwen3.6:35b-nospec`) or a patch to
-Ollama's own scheduler to honor a hard override — not attempted here, out of scope for
-a single test request.
+### 2026-09-16 update (cont.): root cause fully identified, working config-level fix found — closed again
+
+Follow-up work identified the exact controllable lever and a confirmed, reliable fix.
+
+**Topology-independence confirmed:** the identical crash (same stack trace:
+`common_speculative_impl_draft_mtp::draft` → `common_sampler_sample` →
+`llama_context::synchronize` → `ggml_backend_cuda_synchronize`) reproduces on a
+**single-GPU** Tesla M60 instance (N02-M60, `ollama-m60-gpu0`, port 11434), not just
+the 4-GPU M10 pool. This confirms the bug is purely a Maxwell/cuBLAS architecture
+issue, completely independent of pooling — consistent with the original Phase 1
+compute-sanitizer diagnosis (`sgemm_32x32x32_NT_vec` race in closed-source cuBLAS).
+
+**The actual controllable lever is `draft_num_predict`, not `--spec-type`.** Comparing
+`qwen3.8:27b` (crashes, 2/2 attempts with different seeds) against the already-existing
+`qwen3.8:27b-nospec` tag (succeeds, 2/2 attempts): `ollama show` on both reveals they
+reference the **exact same GGUF blobs** (identical weight and mmproj sha256 digests) —
+`-nospec` is *not* an MTP-stripped model variant as assumed in the previous update.
+The only difference is a Modelfile `PARAMETER`: `draft_num_predict 4` (plain) vs.
+`draft_num_predict 0` (`-nospec`). Both still launch `llama-server` with
+`--spec-type draft-mtp` (Ollama's own scheduler forces this either way, per the
+earlier finding that the env var override doesn't work) — but `draft_num_predict=0`
+means no draft tokens are ever actually requested at generation time, so the crashing
+`common_speculative_impl_draft_mtp::draft` code path is never entered, regardless of
+`--spec-type` being structurally active.
+
+**Confirmed directly:** sending `"draft_num_predict": 0` as an explicit per-request
+`options` override against the *plain* `qwen3.8:27b` tag (same crashing model, no
+Modelfile change) succeeded — HTTP 200, correct coherent output, no crash. This proves
+`draft_num_predict` is the real, fully controllable mitigation lever, independent of
+which model tag is loaded.
+
+**Why the Phase 0 Python denylist didn't help:** `auto-optimize.py`'s `has_mtp()`
+returning `False` for denylisted families only makes the *optimizer* skip its own
+sweep and send `extra={}` (no override) on its one-time warmup call — it does not
+inject `draft_num_predict=0` into that or any subsequent request. Since the model's
+own Modelfile bakes in `draft_num_predict=4` as the default, any request that doesn't
+explicitly override it (including the very first one) still uses the crashing value.
+The denylist closes the wrong gap: it stops the sweep from *actively searching for* a
+crash, but does nothing to prevent the *default* from crashing.
+
+**Status: closed again, with a confirmed, immediately usable fix.**
+- **Practical fix, available today:** use `qwen3.8:27b-nospec` (already pulled on
+  N02-M60) instead of the plain tag — same weights, safe default, no further action
+  needed. This matches the existing `qwen3.6:35b-nospec` convention.
+- **General fix for any qwen35-family model with a native MTP head:** either publish
+  a `-nospec` Modelfile variant (`PARAMETER draft_num_predict 0`) the way this one
+  already has, or send `"draft_num_predict": 0` explicitly in every request's
+  `options` — both confirmed to work.
+- **Not yet done, optional hardening:** `ollama-proxy.py` currently forwards requests
+  as-is and does not inject `draft_num_predict=0` for denylisted families, so loading
+  the plain (non-`-nospec`) tag for a new qwen35 model with a native MTP head will
+  still crash on first use until someone either re-tags it or remembers the override.
+  A proxy-side injection for denylisted families would close this permanently but
+  wasn't implemented here — flagging as a follow-up, not attempted in this session.
