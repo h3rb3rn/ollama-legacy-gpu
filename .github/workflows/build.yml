@@ -87,6 +87,30 @@ jobs:
             org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 12, CC 5.0/5.2 (Tesla M10/M60)
             org.opencontainers.image.revision=${{ github.sha }}
 
+      # Flash Attention ON — validated safe only for SINGLE-GPU Maxwell
+      # deployments (PERFORMANCE-OPTIMIZATION-LOG.md, Phase 2). Do NOT use
+      # this tag for multi-GPU pools until that limitation is resolved.
+      - name: Build and push — cuda12-maxwell-singlegpu-fa
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfiles/Dockerfile.cuda12-maxwell
+          push: true
+          build-args: |
+            OLLAMA_VERSION=${{ needs.resolve-version.outputs.version }}
+            JOBS=4
+            LLAMA_CPP_FORK=https://github.com/h3rb3rn/llama.cpp-legacy-gpu.git
+            GGML_CUDA_FA=ON
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-singlegpu-fa-${{ needs.resolve-version.outputs.short }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda12-maxwell-singlegpu-fa-latest
+          cache-from: type=gha,scope=cuda12-maxwell-fa-v1
+          cache-to:   type=gha,scope=cuda12-maxwell-fa-v1,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 12, CC 5.0/5.2, Flash Attention ON (single-GPU only)
+            org.opencontainers.image.revision=${{ github.sha }}
+
   # ── Step 3: CUDA 11 Legacy (K80 CC 3.7 + M10/M60 CC 5.0/5.2) ─────────────
   build-cuda11-legacy:
     needs: resolve-version
@@ -126,7 +150,47 @@ jobs:
             org.opencontainers.image.description=Ollama ${{ needs.resolve-version.outputs.version }} — CUDA 11, CC 3.7+5.0/5.2 (Tesla K80/M10/M60)
             org.opencontainers.image.revision=${{ github.sha }}
 
-  # ── Step 4: Build summary ───────────────────────────────────────────────────
+  # ── Step 4: Record the version — only if BOTH images built ─────────────────
+  # No `if:` → runs only when every job in `needs` succeeded. A failed build
+  # therefore leaves .last-built-version untouched, so check-upstream retries
+  # the same version next Monday instead of silently skipping it.
+  # .last-built-version is not in this workflow's `paths:` filter, so the
+  # bot commit cannot re-trigger this workflow.
+  record-version:
+    needs: [resolve-version, build-cuda12-maxwell, build-cuda11-legacy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Record built version
+        run: |
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          if [ "$(cat .last-built-version 2>/dev/null)" = "$VERSION" ]; then
+            echo "Already recorded: $VERSION — nothing to do."
+            exit 0
+          fi
+          echo "$VERSION" > .last-built-version
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .last-built-version
+          git commit -m "chore: built Ollama $VERSION"
+          # Retry against concurrent pushes to the default branch
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Recorded $VERSION"
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt) — rebasing and retrying"
+            git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)" || exit 1
+          done
+          echo "Could not push .last-built-version after 3 attempts" >&2
+          exit 1
+
+  # ── Step 5: Build summary ───────────────────────────────────────────────────
   summary:
     needs: [resolve-version, build-cuda12-maxwell, build-cuda11-legacy]
     runs-on: ubuntu-latest

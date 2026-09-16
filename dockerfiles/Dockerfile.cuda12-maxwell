@@ -4,14 +4,16 @@
 # CUDA 12.0.1 — lowest CUDA 12 release, broadest M10/M60 driver compatibility
 #
 # Using CUDA 12.0.1 instead of 12.5/12.8 so older drivers remain compatible.
-# GGML_CUDA_FA=OFF (currently): this comment previously claimed "Flash
-# Attention requires CC >= 8.0" — that is factually wrong for ggml's
-# non-tensor-core TILE kernel (real, dispatches for CC<700, explicitly
-# supports head_dim=256 per ggml-cuda/fattn-tile.cu — see
-# BUG-hybrid-arch-degeneration.md's 2026-09-15 update in the parent repo).
-# FA is being kept off by default until a gated rebuild-and-verify pass on
-# real Maxwell hardware confirms correctness (tracked as that bug report's
-# Phase 2) — this is a "not yet verified", not a "doesn't work", situation.
+# GGML_CUDA_FA build-arg (default OFF): the Phase 2 gated rebuild-and-verify
+# pass (BUG-hybrid-arch-degeneration.md, PERFORMANCE-OPTIMIZATION-LOG.md) is
+# done. Result: ggml's non-tensor-core TILE kernel works correctly on real
+# Maxwell hardware (verified on Tesla M10 and M60, including head_dim=256) for
+# SINGLE-GPU deployments — smaller compute buffers, full layer offload,
+# confirmed fixing BUG-hybrid-arch-degeneration.md's original repro on the
+# original hardware. It is NOT yet safe for large multi-GPU MoE pools (3
+# distinct CUDA failures across 2 hosts at 4/6/12 GPUs). Default stays OFF so
+# this image remains safe for every deployment shape; CI additionally builds
+# a `cuda12-maxwell-singlegpu-fa` tag with this ON, for single-GPU use only.
 #
 # IMPORTANT — -real instead of -virtual for Maxwell (CC 5.0/5.2):
 #   -virtual targets generate PTX (intermediate code) that the CUDA driver
@@ -50,6 +52,15 @@ ARG JOBS=8
 ARG CMAKE_VERSION=3.31.7
 # LLAMA_CPP_FORK must be re-declared inside the stage to be visible in RUN commands.
 ARG LLAMA_CPP_FORK=""
+# Flash Attention: OFF by default (safe for multi-GPU pools — see the long comment
+# at the cmake configure step for why this isn't just always ON). Validated safe
+# and beneficial for SINGLE-GPU deployments on Maxwell (smaller compute buffers,
+# full layer offload); validated UNSAFE for large multi-GPU MoE pools (3 distinct
+# CUDA failure modes across 2 hosts — peer-mapping exhaustion, illegal memory
+# access, host-OOM). See PERFORMANCE-OPTIMIZATION-LOG.md, Phase 2. CI builds a
+# separate cuda12-maxwell-singlegpu-fa tag with this set to ON — do not flip this
+# default without re-validating multi-GPU pool stability first.
+ARG GGML_CUDA_FA=OFF
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_GENERATOR=Ninja
@@ -100,7 +111,7 @@ ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 RUN cmake -S llama/server \
           --preset llama_cuda_v12_linux \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
-          -DGGML_CUDA_FA=OFF \
+          -DGGML_CUDA_FA=${GGML_CUDA_FA} \
           -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
           -DGGML_CPU_ALL_VARIANTS=ON \
     && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (no fork clone needed)"
