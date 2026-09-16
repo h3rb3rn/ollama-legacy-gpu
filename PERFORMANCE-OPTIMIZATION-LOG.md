@@ -347,3 +347,38 @@ Ausnutzen bräuchte — und die getesteten Prompts trafen das erforderliche
 bleibt ohne Ersatz — für `qwen35`-Familie also aktuell kein Speculative-Decoding im
 produktiven Einsatz, was angesichts der cuBLAS-Race-Condition (Phase 1) ohnehin die
 richtige, konservative Wahl ist.
+
+---
+
+## Phase 8 — Host-Level-Feintuning
+
+**Status: abgeschlossen — 2 von 3 Punkten sofort geklärt, 1 Punkt nicht empirisch getestet**
+
+**NUMA:** `numactl` auf keinem der drei Hosts installiert; direkt über
+`/sys/devices/system/node/` geprüft: **exakt 1 NUMA-Node auf N11-M10, N02-M60 und
+N04-RTX**. NUMA-Tuning ist damit bestätigt irrelevant, wie im Plan vermutet — kein
+Handlungsbedarf.
+
+**ECC-Toggle:** Tesla M10 unterstützt ECC-Steuerung über `nvidia-smi` gar nicht
+(`ECC Mode: N/A` auf allen getesteten M10-GPUs). Tesla M60 hat ECC bereits **werkseitig/
+standardmäßig deaktiviert** (`Disabled`, auf allen 12 M60-Dies auf N02-M60 bestätigt).
+Es gibt in dieser Flotte nichts zu togglen — der Punkt erledigt sich von selbst, kein
+Experiment nötig, keine Nutzerentscheidung erforderlich.
+
+**`--load-mode mlock`/`none` (ehemals `--mlock`/`--no-mmap`):** Versuch eines A/B-Tests
+mit Olmo-32B (CPU-lastig, ~73 %/27 % CPU/GPU-Split) auf N11-M10 abgebrochen — der
+Request hing bei 0 % GPU-Auslastung fest, ohne dass sich der Zustand über mehrere
+Minuten änderte (echtes Hängenbleiben, nicht nur die erwartete Langsamkeit dieses
+Modells). Angesichts des bereits sehr hohen Zeitaufwands dieser Kampagne nicht weiter
+verfolgt. **Kein empirisches Ergebnis** — verbleibt bei der bereits in der
+Deep-Research-Phase dokumentierten Einschätzung: potenziell hilfreich für
+CPU-Offload-lastige Szenarien angesichts des ohnehin knappen freien RAM auf diesen
+Hosts (14 GiB verfügbar auf N11-M10 laut `free -h`, aber unter Last schon einmal auf
+2,5 GiB beobachtet), aber nicht blind als Default aktivieren — müsste in einer
+ruhigeren Session ohne Host-Nebenlast erneut versucht werden.
+
+### Zusammenfassung Phase 8
+Von den ursprünglich drei Feintuning-Kandidaten waren zwei (NUMA, ECC) bereits durch
+die Hardware-/Treiber-Gegebenheiten erledigt, ohne dass überhaupt eine Änderung nötig
+gewesen wäre. Der dritte (`--load-mode`) bleibt offen für einen späteren, gezielteren
+Versuch.
