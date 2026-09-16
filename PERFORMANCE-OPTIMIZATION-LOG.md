@@ -323,6 +323,46 @@ verfügbares Pool-VRAM) vorerst meiden bzw. mit großzügigerem VRAM-Puffer plan
 der bereits produktiv laufende 4-GPU-M10-Pool auf N11-M10 mit `qwen3.6:35b` bei 41/42
 Layern zeigt — dort mit reichlich Puffer stabil).
 
+### Nachtrag (2026-09-16): Nebenfund relativiert — Crash nicht reproduzierbar
+
+Die oben dokumentierte "grundsätzlichere Instabilität enger Multi-GPU-MoE-Pools" wurde
+mit derselben compute-sanitizer-Methodik wie in Phase 1 nachuntersucht (`llama-cli` +
+GGUF-Blobs aus `ollama-m60-gpu0` extrahiert, GPUs 0+1 auf N02-M60 dafür freigemacht).
+
+**Direkte `llama-cli`-Repro-Versuche** (identischer 2-GPU-Pool, `-sm layer`, `-c 32768`):
+
+| Variante | Ergebnis |
+|---|---|
+| `-ngl 999` (erzwungen) | Sauberer `cudaMalloc failed: out of memory` — anderes Fehlerbild als Original, da Auto-Fit umgangen |
+| `--fit on`, ohne mmproj | **Erfolgreich**, korrekter Output, kein Crash |
+| `--fit on`, mit mmproj (Original-Bedingungen exakt nachgestellt) | **Erfolgreich**, korrekter Output, kein Crash |
+
+**Sauberer Retest über Ollama selbst:** Frischer Container (`moe-clean-retry`, Port
+11462) mit exakt derselben engen 2-GPU-Konfiguration wie beim ursprünglichen Crash
+(`OLLAMA_FLASH_ATTENTION=0`, `OLLAMA_SPLIT_MODE=layer`, `cuda12-maxwell-latest`) —
+**lief einwandfrei durch:** HTTP 200 nach 95,1s, `load_tensors: offloaded 42/42 layers
+to GPU`, `error: None`.
+
+**Layout-Cache geprüft:** `/root/.ollama/layout-cache/` im frischen Container war
+**komplett leer** — die Hypothese eines veralteten/falschen gecachten Tensor-Splits als
+Ursache ist damit widerlegt. `dmesg`-Check auf Xid-Fehler war ergebnislos (vermutlich
+kein Host-dmesg-Zugriff für diesen User, nicht aussagekräftig).
+
+**Korrigierte Einschätzung:** Der ursprüngliche Crash war in drei unabhängigen,
+sauberen Nachstellungsversuchen (3× `llama-cli` direkt, 1× frischer Ollama-Container)
+**nicht reproduzierbar** — auch nicht mit exakt denselben Parametern inkl. mmproj. Das
+spricht dagegen, dass es sich um einen eigenständigen, deterministisch reproduzierbaren
+Architektur-Bug handelt. Wahrscheinlicher: transienter/korrupter GPU-Treiberzustand,
+vermutlich als Nachwirkung eines vorherigen Crashs auf denselben physischen GPUs
+während der intensiven Back-to-Back-Testreihe dieser Session. Der oben formulierte
+Hinweis ("enge Multi-GPU-MoE-Pools vorerst meiden") wird damit **zurückgezogen** — es
+gibt keinen belastbaren Beleg mehr für ein grundsätzliches Architekturproblem. Ein
+Restrisiko durch Treiberzustand nach Crashes bleibt plausibel (nicht ausgeschlossen),
+ist aber ein allgemeines Betriebsthema (GPU-Reset nach Fehler), kein MoE- oder
+Pool-spezifisches. Nicht zu verwechseln mit dem separaten, unabhängig bestätigten
+FA=ON-Multi-GPU-Befund aus Phase 2 (andere Tests, andere Hosts) — der bleibt unverändert
+bestehen.
+
 ---
 
 ## Phase 7 — N-Gram-Speculative-Decoding als MTP-Alternative
