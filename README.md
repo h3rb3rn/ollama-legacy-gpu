@@ -2,7 +2,23 @@
 
 > **Latest release: [v0.30.0](https://github.com/h3rb3rn/ollama-legacy-gpu/releases/tag/v0.30.0)** — based on Ollama v0.30.10 · Docker: `ghcr.io/h3rb3rn/ollama-legacy:cuda12-maxwell-latest`
 
-A fork of [Ollama](https://github.com/ollama/ollama) — the Go runtime and Docker packaging — optimized for **heterogeneous multi-GPU pools** that combine modern RTX cards with legacy Tesla M10/M60 GPUs on CUDA 12.
+A fork of [Ollama](https://github.com/ollama/ollama) — the Go runtime and Docker packaging — optimized for **legacy Tesla M10/M60 (Maxwell, CC 5.0/5.2) GPUs** on CUDA 12.
+
+> **Status (2026-09-16):** This fork is validated and deployed on Tesla M10/M60 hosts
+> (N11-M10, N02-M60, and the Tesla-only containers on N04-RTX). It is **not** used for
+> the RTX/GTX GPUs on N04-RTX — those run stock upstream Ollama in a separate
+> deployment. A direct test confirmed this fork's current build **crashes on RTX 2060
+> on every model load** (`CUDA error: unspecified launch failure`, GPU-discovery bug —
+> a different, unrelated code path than the Flash-Attention kernel dispatch described
+> in section 3 below). See
+> [`PERFORMANCE-OPTIMIZATION-LOG.md`](PERFORMANCE-OPTIMIZATION-LOG.md#zusatzuntersuchung-2026-09-16-fork-image-auf-rtxgtx-gpus-getestet--nicht-einsatzbereit)
+> for the full test and root cause, and
+> [`BUG-hybrid-arch-degeneration.md`](BUG-hybrid-arch-degeneration.md) for a second,
+> separate finding (MTP speculative-decoding crash, Finding 2) and its fix. The
+> hardware table and RTX-inclusive framing below describe the original design intent
+> for a unified 12-GPU pool on N04-RTX; the *current* production topology is
+> per-architecture-class instead (see the two linked documents for what's actually
+> deployed and validated today).
 
 > **Reference system: N04-RTX**  
 > AMD EPYC 3151 4-Core · 128 GiB RAM · Ubuntu 22.04 LTS · CUDA 12.0.1 driver  
@@ -152,6 +168,13 @@ llama4:scout: all 12 are needed because the model exceeds the RTX pool (60 GiB).
 
 ### 3. Flash Attention on All Architectures (including Maxwell)
 
+> **Caveat (2026-09-16):** The kernel-dispatch logic described below is real and
+> correct (verified directly against `ggml-cuda/fattn.cu` source) — but a *separate*
+> bug in this fork's build (GPU-discovery / compute-capability detection) currently
+> crashes every model load on RTX 2060 before this dispatch is ever reached. Validated
+> and safe on Maxwell (Tesla M10/M60) only; **do not deploy this image to RTX/GTX GPUs**
+> until that's fixed. See the status note at the top of this file.
+
 **Discovery:** `ggml-cuda/fattn.cu` in llama.cpp dispatches FA kernels by compute
 capability at runtime:
 
@@ -220,6 +243,16 @@ layouts are stored separately.
 ---
 
 ## Model Performance on N04-RTX
+
+> **Note:** The `qwen3.6:35b` row below was measured on the RTX-only pool, which today
+> runs **stock upstream Ollama** (`ollama`/`ollama-rgtx` containers), not this fork's
+> image — see the status note at the top. It's kept here as the historical reference
+> number this fork's greedy-fill design was validated against; it doesn't reflect this
+> fork's own image running on that hardware (which currently doesn't work at all, see
+> section 3). It also currently runs with MTP speculative decoding **unmitigated**
+> (`draft_num_predict=2`, the same crash-capable configuration documented as Finding 2
+> in `BUG-hybrid-arch-degeneration.md`) since stock Ollama has no equivalent of this
+> fork's `ollama-proxy.py` safety override.
 
 | Model | Size | Pool | GPUs used | Flash Attn | tok/s |
 |-------|------|------|-----------|------------|-------|

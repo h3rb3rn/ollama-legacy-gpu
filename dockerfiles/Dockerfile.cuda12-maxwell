@@ -174,8 +174,16 @@ RUN python3 /tmp/patch-ollama-dynamic-pool.py /src
 RUN python3 /tmp/patch-ollama-batch.py /src
 
 # Go binary
+# -X sets version.Version at link time — without it the binary reports the
+# package's zero-value default "0.0.0" via /api/version regardless of which
+# Ollama release was actually built (confirmed live: every fork-image
+# container showed "0.0.0", vs. e.g. "0.32.14" on a stock-Ollama container —
+# harmless for inference itself, but makes fleet-monitoring dashboards unable
+# to tell which Ollama version is actually running).
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -buildmode=pie -ldflags="-w -s" -o /bin/ollama .
+    go build -trimpath -buildmode=pie \
+      -ldflags="-w -s -X github.com/ollama/ollama/version.Version=${OLLAMA_VERSION#v}" \
+      -o /bin/ollama .
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM ubuntu:24.04
