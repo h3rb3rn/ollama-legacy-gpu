@@ -714,3 +714,38 @@ crash, but does nothing to prevent the *default* from crashing.
   still crash on first use until someone either re-tags it or remembers the override.
   A proxy-side injection for denylisted families would close this permanently but
   wasn't implemented here — flagging as a follow-up, not attempted in this session.
+
+### 2026-09-16 update (cont. 2): systemic proxy fix shipped + non-proxy hosts brought in line
+
+The "optional hardening" above was implemented: `scripts/ollama-proxy.py` now checks
+model family via `/api/show` on every inference request and force-injects
+`draft_num_predict=0` for `qwen3`/`qwen35(moe)` families — both for uncached (first
+load) requests and to override a stale cache entry that predates this fix. Confirmed
+live example of the latter: N04-RTX's auto-optimize cache for `qwen3.6:35b` carried
+`draft_num_predict=2` since 2026-06-22, the exact crash-capable config, apparently
+never crashed only by chance (non-deterministic race). Hot-deployed to all 18
+fork-image containers (N11-M10: 1, N04-RTX tesla-1..4 + m60-guard: 5, N02-M60
+gpu0..11: 12); a `docker cp` permission mishap during the hot-deploy briefly broke
+all 18 proxies (lost the executable bit → entrypoint silently skipped starting them),
+caught via healthcheck status and fixed with `chmod +x` + restart within minutes.
+
+**Two containers on N04-RTX (`ollama`, `ollama-rgtx`, the RTX/GTX pool ports 11434/
+11435) don't run this fork's image or proxy at all** — they're built from
+`worker-rtx/Dockerfile.github`, a thin wrapper around the stock upstream `ollama`
+binary, with `OLLAMA_HOST` bound directly to the port (confirmed via `docker exec ...
+ps aux`: just `ollama serve`, no proxy process). The proxy-side fix cannot reach
+these. Checked all 4 qwen3/qwen35-family models present there
+(`qwen3.5:4b`, `qwen3.6:27b`, `qwen3.6:35b`, `qwen3.8:27b`): only `qwen3.8:27b` has a
+native MTP head (`nextn_predict_layers: 1`) on this host — the other three, despite
+matching the family-name denylist, don't carry MTP metadata in the specific builds
+pulled here (may differ by host/pull-date; don't assume this holds elsewhere without
+checking `qwen35moe.nextn_predict_layers` via `/api/show`). Fixed the one affected
+model by overwriting its Modelfile in place (`ollama create qwen3.8:27b -f ...` with
+`PARAMETER draft_num_predict 0` instead of the original `4`) rather than publishing a
+separate `-nospec` tag — since there's no proxy to redirect callers, any existing
+integration using the plain tag name needed to become safe without knowing to switch
+names. `ollama` and `ollama-rgtx` share the same `/opt/ollama/models` volume, so one
+`ollama create` fixed both. Verified: HTTP 200, coherent output, no crash.
+**Residual gap on these two containers:** any *future* qwen35-family model pulled
+here with a native MTP head will still crash on first use — there's no systemic
+protection without a proxy, only this one model has been hardened so far.
