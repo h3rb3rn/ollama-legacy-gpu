@@ -1,12 +1,16 @@
 # Bug Report: Hybrid/Recurrent-Architecture Models Degenerate on Maxwell (cuda12-maxwell fork)
 
-**Status:** **RESOLVED** as of 2026-09-15 (see bottom of file) — the exact original repro
-model (`moe-expert-coder-4b-v2`) was re-run on real Tesla M60 hardware (N02-M60) with the
-accumulated fixes (FA rebuild + `LLAMA_ARG_MMPROJ_OFFLOAD=false` + MTP fix) and produced
-coherent, non-repeating output at 20.48 tok/s with full 33/33-layer GPU residency. Root
-cause was never the SSM/Mamba kernel — see the full timeline below for how the diagnosis
-evolved (CLIP compute-buffer starvation → wrong fix tried and reverted → real fix found
-→ confirmed fixed on the original hardware+model combination).
+**Status:** **PARTIALLY RESOLVED**, Finding 2 reopened 2026-09-16 (see bottom of file).
+The exact original repro model (`moe-expert-coder-4b-v2`) was re-run on real Tesla M60
+hardware (N02-M60) with the accumulated fixes (FA rebuild + `LLAMA_ARG_MMPROJ_OFFLOAD=false`
++ MTP fix) and produced coherent, non-repeating output at 20.48 tok/s with full
+33/33-layer GPU residency — that specific repro stays fixed. Root cause was never the
+SSM/Mamba kernel — see the full timeline below for how the diagnosis evolved (CLIP
+compute-buffer starvation → wrong fix tried and reverted → real fix found → confirmed
+fixed on the original hardware+model combination). However, the MTP-crash denylist
+(Finding 2) turned out to have a coverage gap: `qwen3.8:27b` crashes on first load with
+the identical MTP race-condition signature, and no config-level workaround exists —
+see "2026-09-16 update" at the bottom for the reopened finding.
 **Severity:** High — makes the entire Qwen3.5/3.8 hybrid-attention model family unusable
 for inference quality on the M10/M60 Tesla fleet (~16 physical GPUs across N02-M60,
 N04-RTX, N11-M10), while dense-transformer models on the same hardware are unaffected.
@@ -617,3 +621,49 @@ un-patchable from this project, on end-of-life Maxwell hardware with no further 
 support expected.** The MTP denylist already shipped in Phase 0
 (`scripts/auto-optimize.py`'s `has_mtp()`) is therefore not a stopgap but the correct,
 permanent fix for this hardware segment. No further action planned on this finding.
+
+### 2026-09-16 update: Finding 2 reopened — denylist has a coverage gap, reproduced with `qwen3.8:27b`
+
+The Phase 0 denylist (`MTP_CRASH_DENYLIST_ARCH_SUBSTRINGS`, `has_mtp()` in
+`scripts/auto-optimize.py`) was assumed to fully close this finding. Testing
+`qwen3.8:27b` (new model, `family: qwen35` per `/api/show` — matches the denylist
+substring) on the N11-M10 4-GPU pool crashed on the **very first load**, with the
+identical `CUDA error: an illegal memory access was encountered` /
+`ggml_backend_cuda_synchronize` stack trace as the original Finding 2, and
+`spec common_specu: adding speculative implementation 'draft-mtp'` in the log.
+
+**Root cause of the gap:** the Python denylist only prevents `auto-optimize.py`'s own
+benchmark *sweep* (Phase 2 in that script, which actively tries `draft_num_predict>0`)
+from ever running for denylisted families — it does **not** prevent Ollama's own Go
+scheduler from auto-detecting a native MTP draft head in the GGUF and unconditionally
+appending `--spec-type draft-mtp` to the `llama-server` command line on the *first*
+load, before any Python-side logic is even in a position to intervene. Confirmed this
+is not overridable from outside: setting `LLAMA_ARG_SPEC_TYPE=none` as a container env
+var has **no effect** — the server log explicitly states
+`warn: LLAMA_ARG_SPEC_TYPE environment variable is set, but will be overwritten by
+command line argument --spec-type`, i.e. Ollama's own scheduler forces the command-line
+flag regardless of the env var.
+
+This is model-specific, not universal to the whole qwen35 family: `qwen3.6:35b` was
+run twice on this same pool earlier the same day with FA=ON, no crash, no `draft-mtp`
+in its launch command — its GGUF apparently doesn't carry (or Ollama doesn't detect) a
+native MTP head, while `qwen3.8:27b`'s does. A registry tag `qwen3.6:35b-nospec`
+already exists (seen in the N02-M60 model list), suggesting the practical mitigation
+for models like this is an MTP-stripped GGUF variant, not a config-level flag — no such
+variant currently exists for `qwen3.8:27b`.
+
+**Operational side-effect observed:** after two back-to-back crashed loads of this
+27B model, the container entered a degraded state (`llama-server GPU discovery
+watchdog timed out`, `context deadline exceeded`, a `<defunct>` zombie `llama-server`
+process, and a hung `/api/generate` request against an unrelated, previously-working
+model). A plain `docker restart` fully recovered it — worth knowing as an operational
+runbook step after any MTP crash on this fork, not just a curiosity.
+
+**Status: reopened.** `qwen3.8:27b` is currently **unusable** on this fork — every
+load attempt crashes, with no known config-level workaround. Finding 2's underlying
+cuBLAS race-condition diagnosis stands unchanged; what's corrected here is only the
+claim that the Phase 0 denylist provides complete protection. It protects the
+benchmark sweep, not first-load native MTP auto-detection. Real fix would need either
+an MTP-stripped model variant (as already done for `qwen3.6:35b-nospec`) or a patch to
+Ollama's own scheduler to honor a hard override — not attempted here, out of scope for
+a single test request.
