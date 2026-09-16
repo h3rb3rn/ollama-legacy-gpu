@@ -405,20 +405,44 @@ standardmäßig deaktiviert** (`Disabled`, auf allen 12 M60-Dies auf N02-M60 bes
 Es gibt in dieser Flotte nichts zu togglen — der Punkt erledigt sich von selbst, kein
 Experiment nötig, keine Nutzerentscheidung erforderlich.
 
-**`--load-mode mlock`/`none` (ehemals `--mlock`/`--no-mmap`):** Versuch eines A/B-Tests
-mit Olmo-32B (CPU-lastig, ~73 %/27 % CPU/GPU-Split) auf N11-M10 abgebrochen — der
-Request hing bei 0 % GPU-Auslastung fest, ohne dass sich der Zustand über mehrere
-Minuten änderte (echtes Hängenbleiben, nicht nur die erwartete Langsamkeit dieses
-Modells). Angesichts des bereits sehr hohen Zeitaufwands dieser Kampagne nicht weiter
-verfolgt. **Kein empirisches Ergebnis** — verbleibt bei der bereits in der
-Deep-Research-Phase dokumentierten Einschätzung: potenziell hilfreich für
-CPU-Offload-lastige Szenarien angesichts des ohnehin knappen freien RAM auf diesen
-Hosts (14 GiB verfügbar auf N11-M10 laut `free -h`, aber unter Last schon einmal auf
-2,5 GiB beobachtet), aber nicht blind als Default aktivieren — müsste in einer
-ruhigeren Session ohne Host-Nebenlast erneut versucht werden.
+**`--load-mode mlock`/`none` (ehemals `--mlock`/`--no-mmap`):** Erster A/B-Versuch mit
+Olmo-32B (CPU-lastig, ~73 %/27 % CPU/GPU-Split) auf **N11-M10** hing minutenlang fest.
+Root-Cause geklärt (siehe unten) — **kein Ollama-Bug**, sondern echtes Swap-Thrashing:
+N11-M10 hat nur 15,5 GiB RAM, die 73 % CPU-ausgelagerten Layer eines 19-GiB-Modells
+(~14 GiB) drängten in den Swap. `ps aux` zeigte den `llama-server`-Prozess durchgehend im
+`D`-Zustand (unterbrechbarer I/O-Wait), Swap-Nutzung stieg auf 10 GiB. Ein `/api/generate`
+brauchte >10 Minuten für 150 Tokens, bevor Ollamas eigener Server-Timeout griff. **N11-M10
+damit als Testsystem für CPU-offload-lastige große Modelle grundsätzlich ungeeignet**
+(RAM-Kapazität, kein Werkzeug-Problem) — Host für diese Testklasse verworfen.
+
+**Sauberer Retest auf N02-M60** (125 GiB RAM, 120 GiB verfügbar) — Container `gpu6`
+(Port 11440, Tesla M60, 8 GiB VRAM) testweise neu erstellt, einmal mit Standard-Lademodus,
+einmal mit `LLAMA_ARG_LOAD_MODE=mlock`, sonst identische Konfiguration
+(`ollama-legacy:cuda12-maxwell-fa-test`, FA=ON, `LLAMA_ARG_MMPROJ_OFFLOAD=false`).
+Modell: `gemma4:31b` (dense, ~19 GiB, CPU-lastiger Split, HF-Registry-Bug umgangen durch
+Nutzung eines bereits lokal getaggten Modells statt `hf.co/...`). Gleicher Prompt
+(`temperature=0.2, seed=42, num_predict=150`).
+
+| Variante | Ladezeit | Decode (150 Tok.) | tok/s |
+|---|---|---|---|
+| Standard (mmap default) | 50,4 s | 97,99 s | 1,531 |
+| `LLAMA_ARG_LOAD_MODE=mlock` | 46,6 s | 101,95 s | 1,471 |
+
+**Ergebnis:** Kein signifikanter Unterschied (Differenz innerhalb der Messschwankung
+eines Einzellaufs). Swap-Nutzung blieb in beiden Läufen konstant bei 5,8 GiB (kein aktives
+Thrashing) — erwartungsgemäß, da 120 GiB freier RAM für die ~14 GiB CPU-Layer bei weitem
+ausreichen. **Verdict: `mlock` bringt auf ausreichend dimensionierten Hosts (N02-M60,
+N04-RTX) nichts und wird nicht übernommen.** Es bestätigt aber sauber die Hypothese aus
+dem N11-M10-Vorfall: `mlock` wirkt nur unter echtem RAM-Druck — und genau dort (N11-M10)
+ist es nicht praktikabel testbar, weil bereits der Baseline-Lauf durch Thrashing
+unbrauchbar langsam wird. Empfehlung: große CPU-Offload-lastige Modelle grundsätzlich
+nicht auf N11-M10 betreiben (RAM-Obergrenze ~15,5 GiB), sondern auf N02-M60/N04-RTX.
 
 ### Zusammenfassung Phase 8
-Von den ursprünglich drei Feintuning-Kandidaten waren zwei (NUMA, ECC) bereits durch
-die Hardware-/Treiber-Gegebenheiten erledigt, ohne dass überhaupt eine Änderung nötig
-gewesen wäre. Der dritte (`--load-mode`) bleibt offen für einen späteren, gezielteren
-Versuch.
+Alle drei ursprünglichen Feintuning-Kandidaten sind jetzt abgeschlossen. NUMA und ECC
+waren bereits durch die Hardware-/Treiber-Gegebenheiten erledigt, ohne dass eine Änderung
+nötig gewesen wäre. `--load-mode` wurde empirisch sauber getestet (N02-M60) und **nicht
+übernommen** — kein Nutzen bei ausreichendem RAM, echter Nutzen nur unter Speicherdruck,
+den es auf den besser dimensionierten Hosts nicht gibt. Nebenbefund: N11-M10s begrenztes
+RAM (15,5 GiB) ist eine eigenständige Betriebs-Einschränkung für große Dense-Modelle mit
+hohem CPU-Offload-Anteil, unabhängig von `mlock`.
