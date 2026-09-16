@@ -446,3 +446,68 @@ nötig gewesen wäre. `--load-mode` wurde empirisch sauber getestet (N02-M60) un
 den es auf den besser dimensionierten Hosts nicht gibt. Nebenbefund: N11-M10s begrenztes
 RAM (15,5 GiB) ist eine eigenständige Betriebs-Einschränkung für große Dense-Modelle mit
 hohem CPU-Offload-Anteil, unabhängig von `mlock`.
+
+---
+
+## Phase 9 — Produktions-Rollout
+
+**Status: abgeschlossen (2026-09-16)**
+
+**Befund vor dem Rollout:** Die persistierten Compose-Dateien auf allen drei Hosts waren
+erheblich vom tatsächlichen, in dieser Kampagne validierten Live-Zustand abgedriftet —
+alle Fixes liefen bisher über manuelle Container-Neuerstellung (`docker run`), nie über
+die Compose-Dateien selbst. Konkret: N11-M10s Compose beschrieb noch das alte
+1-Container-4-GPU-Pool-Modell; N02-M60s Compose referenzierte noch Stock-`ollama/
+ollama:0.24.0` mit falschem Port-Mapping (Pool+8-Single statt der live längst
+umgesetzten 12-Single-Topologie); nur N04-RTX war schon nah am Live-Zustand (fehlten nur
+die Thread-/MMPROJ-Env-Vars).
+
+**Ausgerollt (Env-Fixes, alle drei Hosts, nur Single-GPU-Instanzen):**
+`LLAMA_ARG_THREADS=4`, `LLAMA_ARG_THREADS_BATCH=4`, `LLAMA_ARG_MMPROJ_OFFLOAD=false`,
+`OLLAMA_SPLIT_MODE`-Verhalten (Default `layer`, keine `row`-Konfiguration mehr aktiv).
+
+**Ausgerollt (FA=ON-Single-GPU-Image, Phase 2):** Alle 22 Single-GPU-Instanzen auf allen
+drei Hosts liefen zuvor entweder noch auf FA=OFF (N11-M10, 4 Instanzen) oder auf
+lokal-only gebauten Test-Tags (N02-M60: 12, N04-RTX: 6) — keine davon nutzte den
+offiziell in der CI gebauten, in GHCR veröffentlichten Tag
+`cuda12-maxwell-singlegpu-fa-latest`. Alle 22 Instanzen wurden auf dieses offizielle
+Image umgestellt (rollierend, pro Container `docker rm -f` + Neustart, Health-Check +
+Smoke-Test nach jedem Schritt):
+
+| Host | Instanzen | Vorher | Nachher |
+|---|---|---|---|
+| N11-M10 | `ollama-tesla-1..4` (Port 11434-11437) | FA=OFF, `cuda12-maxwell-latest` | FA=ON, `cuda12-maxwell-singlegpu-fa-latest` |
+| N04-RTX | `ollama-tesla-1..4`, `ollama-m60-1/2` (Port 11436-11441) | FA=ON, lokaler Test-Tag | FA=ON, offizieller GHCR-Tag |
+| N02-M60 | `ollama-m60-gpu0..11` (Port 11434-11445) | FA=ON, lokaler Test-Tag | FA=ON, offizieller GHCR-Tag |
+
+**Bewusst unverändert (Multi-GPU-Pools, Phase 2/6-Limitation):** `ollama-m60-guard`
+(N04-RTX, 2× M60 kombiniert) bleibt auf `cuda12-maxwell-latest`, FA=OFF — Multi-GPU-FA
+ist nicht validiert. Kein Multi-GPU-Pool-Container wurde in dieser Kampagne umgestellt.
+
+**Smoke-Test:** `ollama-tesla-4` (N11-M10, GPU3, erste Instanz im Rollout) mit
+`smollm3:3b`, `temperature=0.2, seed=42, num_predict=60` — HTTP 200, 24,0s, 8,21 tok/s,
+kohärenter Output. Alle 22 Instanzen nach Neustart `healthy` (Docker-Healthcheck via
+`/api/tags`).
+
+**Compose-Dateien aktualisiert:**
+- `compose/docker-compose.maxwell.yml` (dieses Repo, GitHub) — von 1-Container-Pool auf
+  4 Single-GPU-Services umgestellt, FA=ON-Image, vollständiges Fix-Set. GPU-UUIDs sind
+  N11-M10-spezifisch (Kommentar im File verweist darauf).
+- N04-RTX (`llm-studio/worker-rtx/docker-compose.yml`, separates Deployment-Repo) und
+  N02-M60 (`llm-studio/worker-m60/docker-compose.yml`, dito) wurden mit dem tatsächlichen
+  Live-Zustand synchronisiert (Details im Deployment-Repo-Commit, nicht hier — anderes
+  Repository/Remote als dieser Fork).
+
+**Nicht angefasst:** Produktions-Compose-Datei auf N04-RTX für `ollama`/`ollama-rgtx`
+(RTX-Pool, außerhalb des Scopes — Nutzeranweisung dieser Kampagne). `ollama-0240-test`
+(N11-M10) und `ollama-0240-m60` (N04-RTX), zwei themenfremde Alt-Container, ebenfalls
+unangetastet gelassen.
+
+### Zusammenfassung Phase 9
+Alle drei Hosts laufen jetzt durchgängig auf dem offiziell in der CI gebauten,
+validierten Fix-Set (Threads, MMPROJ-Offload, Split-Mode, FA=ON für Single-GPU). Die
+Compose-Dateien wurden nachgezogen, damit ein künftiges `docker compose up -d` nicht
+auf einen älteren, unvalidierten Stand zurückfällt. Damit ist die gesamte
+Optimierungskampagne (Phase 0-9) abgeschlossen. Einziger offener Punkt bleibt Phase 3s
+Text-only-Hybrid-Konfundierungstest, blockiert durch den hf.co-Registry-Bug — kein
+Blocker für den produktiven Betrieb.
