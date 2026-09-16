@@ -257,3 +257,68 @@ committet. Nachgeholt: `GGML_CUDA_FA` ist jetzt ein Build-Arg (Default weiterhin
 den Tag `cuda12-maxwell-singlegpu-fa-latest` mit FA=ON. Zukünftige Single-GPU-Rollouts
 können diesen Tag direkt pullen statt manuell lokale Images per `docker save`/`scp`/
 `docker load` zu verteilen.
+
+---
+
+## Phase 5 — Batch/ubatch neu tunen (nach FA-Rebuild)
+
+**Status: abgeschlossen — kein Handlungsbedarf, Nebenfund dokumentiert**
+
+**Prefill-Benchmark** (640-Token-Prompt, `qwen3.5:4b`, N02-M60/GPU0, FA=ON,
+Standard-Batch=1024): **251,92 tok/s**. Zweiter Lauf (versucht mit kleinerem Batch)
+lief aus im nächsten Absatz beschriebenen Grund ebenfalls bei Batch=1024:
+**251,07 tok/s** — praktisch identisch, keine Überraschung angesichts des Fundes unten.
+
+**Nebenfund:** `OLLAMA_MAX_BATCH_SIZE` (der von `patch-ollama-batch.py` injizierte
+Cap-Mechanismus) hat in keinem der Builds dieser Session eine Wirkung gezeigt — der
+String `OLLAMA_MAX_BATCH_SIZE` fehlt komplett im kompilierten `ollama`-Binary
+(`strings`-Check). Der Patch schlägt gegen die aktuelle Ollama-Quellcode-Version
+offenbar still fehl (Ziel-Pattern im Go-Code hat sich vermutlich geändert) — betrifft
+potenziell auch die produktiv genutzte `selectGPUPool()`-Logik auf N04-RTX für den
+großen 12-GPU-Pool-Fall, wo der Cap laut Code-Kommentar automatisch gesetzt werden
+soll. Separates, nicht in dieser Kampagne behobenes Ticket.
+
+**Warum trotzdem kein Handlungsbedarf für Single-GPU-FA-Deployments:** Der ursprüngliche
+Zweck des Batch-Caps war, den *Non-FA*-Attention-Compute-Buffer klein zu halten
+(`batch × ctx × heads × head_dim × 4 Byte`, mehrere GiB bei großem Batch). Mit FA=ON
+entfällt dieses Problem strukturell — FA materialisiert die große Zwischen-Matrix gar
+nicht erst, unabhängig von der Batch-Größe (bestätigt: Compute-Buffer bleiben bei
+140–494 MiB, siehe Phase 2). Ollamas Standard-Batch (1024) funktioniert für
+Single-GPU-FA-Deployments ohne Anpassung. Für den (weiterhin FA=OFF) großen
+Multi-GPU-Pool-Fall bleibt der Cap-Mechanismus relevant, ist aber aktuell defekt —
+das wäre der eigentliche nächste Schritt, falls jemand den großen Pool-Fall
+weiterverfolgen möchte.
+
+---
+
+## Phase 6 — `--n-cpu-moe` für enge MoE-Configs
+
+**Status: abgeschlossen — kein sauberes A/B möglich, aber wichtiger Nebenfund**
+
+**Setup:** `qwen3.6:35b` (256-Expert-MoE, ~23 GiB) auf einem künstlich auf 2 GPUs
+verkleinerten M60-Pool (16 GiB kombiniert, absichtlich eng) — 2 der 12
+Single-Instanz-Container auf N02-M60 temporär gestoppt, um GPUs freizugeben,
+danach wiederhergestellt. FA=OFF (Multi-GPU, siehe Phase 2).
+
+**Baseline (kein `--n-cpu-moe`, automatisches Fitting):** Lädt zunächst scheinbar
+erfolgreich (`offloaded 42/42 layers`, aber `CPU_Mapped model buffer size = 20293
+MiB` — die Experten-Gewichte landen bereits automatisch per mmap größtenteils auf
+CPU). Server-Log empfiehlt selbst `--load-mode none` statt mmap für bessere
+Performance. **Crasht dann während der Generierung:** `llama-server terminated:
+signal: aborted (core dumped)`.
+
+**Mit explizitem `--cpu-moe`** (alle Experten-Gewichte fest auf CPU): **Crasht
+ebenfalls**, diesmal mit `CUDA error: an illegal memory access was encountered`.
+
+**Kein sauberer Vergleich möglich** — beide Konfigurationen sind auf diesem engen
+2-GPU-Pool instabil. **Wichtiger Nebenfund, der über die ursprüngliche Phase-6-Frage
+hinausgeht:** Die in Phase 2 dokumentierte Multi-GPU-MoE-Instabilität ist **nicht nur
+ein FA=ON-Problem** — sie tritt auch mit FA=OFF auf, sobald der Pool eng genug ist.
+Das deutet auf ein grundsätzlicheres Problem mit engen Multi-GPU-MoE-Konfigurationen
+in diesem Fork auf Maxwell hin, unabhängig von Flash Attention oder Experten-Platzierung.
+**Nicht weiter verfolgt** in dieser Kampagne — eigenständiges, größeres
+Untersuchungsthema (eigener compute-sanitizer-Lauf o.ä. wäre der nächste Schritt,
+analog zu Phase 1). Empfehlung: enge Multi-GPU-MoE-Pools (Modell nur knapp größer als
+verfügbares Pool-VRAM) vorerst meiden bzw. mit großzügigerem VRAM-Puffer planen (wie
+der bereits produktiv laufende 4-GPU-M10-Pool auf N11-M10 mit `qwen3.6:35b` bei 41/42
+Layern zeigt — dort mit reichlich Puffer stabil).
