@@ -650,3 +650,57 @@ Skripte nachziehen, nicht auf das Kopierverhalten verlassen.
 Fork-Repo (GitHub, `h3rb3rn/ollama-legacy-gpu`): `86d00f9`, `2a1c110`, `c433244`,
 `2b50f74`, `51bae38`.
 Deployment-Repo (git.4noobs.de, `h3rb3rn/ollama`): `82cc26b`, `9077a63`.
+
+---
+
+## Zusatzuntersuchung (2026-09-16): Fork-Image auf RTX/GTX-GPUs getestet — NICHT einsatzbereit
+
+**Frage:** Lohnt sich die Umstellung von `ollama`/`ollama-rgtx` (N04-RTX, RTX 2060/3060 +
+GTX 1060, aktuell Stock-Ollama via `Dockerfile.github`) auf das Fork-Image, um den
+systemischen MTP-Crash-Schutz (Proxy) auch dort zu bekommen?
+
+**Vorab-Analyse (Quellcode, `ggml-cuda/fattn.cu`):** Die Flash-Attention-Kernel-Wahl
+(`ggml_cuda_get_best_fattn_kernel()`) ist zur Laufzeit hardware-abhängig und vom Build
+unabhängig — auf Turing/Ampere (RTX 2060/3060) wird immer der Tensor-Core-Pfad
+(`BEST_FATTN_KERNEL_MMA_F16`) gewählt, der Maxwell-TILE-Kernel nie erreicht. Auf Pascal
+(GTX 1060, keine Tensor Cores) landet man beim TILE-Kernel — dort wäre der Fork
+potenziell sogar von Vorteil, analog zu Maxwell. Diese Analyse war korrekt, aber wie
+der Test zeigt, nicht die entscheidende Frage.
+
+**Isolierter Test:** Testcontainer mit `cuda12-maxwell-singlegpu-fa-latest` auf
+denselben GPUs wie `ollama-rgtx` (GPU6 RTX 2060 + GPU11 GTX 1060, zum Testzeitpunkt
+idle, Produktion nicht angetastet), separater Port. Baseline zuerst mit dem
+Stock-Image auf der echten `ollama-rgtx`-Produktionsinstanz gemessen (23,5 tok/s,
+`hf.co/h3rb3rn/moe-sovereign-planner-9b`, sauber).
+
+**Ergebnis: Fork-Image crasht beim Laden JEDES getesteten Modells auf RTX 2060** —
+sowohl im Dual-GPU-Setup (RTX2060+GTX1060) als auch isoliert auf einer einzelnen
+RTX 2060, sowohl mit einem Hybrid-SSM-Modell als auch mit einem einfachen dichten
+Modell (`smollm3-expert-security-3b`). Fehler: `CUDA error: unspecified launch
+failure`, tritt direkt nach dem Layer-Offload auf, vor jeder eigentlichen Generierung
+— 3/3 Testläufe, 100 % Reproduktionsrate.
+
+**Root Cause identifiziert:** Log zeigt bei jedem Start:
+```
+level=WARN msg="llama-server discovery: could not determine compute capability for
+CUDA device — architecture filtering disabled for this device. If inference crashes,
+check that the CUDA backend supports this GPU." device="NVIDIA GeForce RTX 2060"
+```
+Ollamas GPU-Discovery-Schritt kann beim Fork-Build die Compute Capability der RTX 2060
+nicht ermitteln (obwohl eine spätere, andere Codestelle im selben Log korrekt
+`compute=7.5` meldet — zwei verschiedene Erkennungspfade, inkonsistent). Mit
+deaktivierter Architektur-Filterung wird vermutlich eine falsche/inkompatible
+CUBIN-Variante für den tatsächlichen Kernel-Launch gewählt → generischer
+Launch-Fehler. **Bestätigt fork-spezifisch:** dieselbe Warnung erscheint in keinem
+einzigen Log des seit 2 Tagen laufenden `ollama-rgtx` (Stock-Image, identische GPU).
+
+**Verdict: Fork-Image aktuell NICHT für RTX/GTX-GPUs einsatzbereit — nicht auf
+N04-RTXs `ollama`/`ollama-rgtx` umstellen.** Kein Zusammenhang mit der ursprünglich
+vermuteten Tensor-Core-Frage (die Vorab-Analyse dazu war korrekt, aber irrelevant,
+weil das Modell gar nicht so weit kommt, dass Flash-Attention-Kernel-Auswahl
+überhaupt greifen würde). Der MTP-Crash-Schutz auf diesen zwei Containern bleibt bei
+der bereits umgesetzten Einzelmodell-Lösung (Modelfile-Override für `qwen3.8:27b`,
+siehe `BUG-hybrid-arch-degeneration.md`). Eine echte Behebung würde eine
+Fehlersuche im GPU-Discovery-Code dieses Forks für Nicht-Maxwell-Architekturen
+erfordern — nicht in dieser Kampagne untersucht, da außerhalb des Scopes
+(RTX/GTX-Hosts).
