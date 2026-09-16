@@ -322,3 +322,28 @@ analog zu Phase 1). Empfehlung: enge Multi-GPU-MoE-Pools (Modell nur knapp grö�
 verfügbares Pool-VRAM) vorerst meiden bzw. mit großzügigerem VRAM-Puffer planen (wie
 der bereits produktiv laufende 4-GPU-M10-Pool auf N11-M10 mit `qwen3.6:35b` bei 41/42
 Layern zeigt — dort mit reichlich Puffer stabil).
+
+---
+
+## Phase 7 — N-Gram-Speculative-Decoding als MTP-Alternative
+
+**Status: abgeschlossen — kein Nutzen, nicht übernommen**
+
+`--spec-type ngram-simple` (`LLAMA_ARG_SPEC_TYPE`) auf `qwen3.5:4b`, Single-GPU M60,
+FA=ON, getestet mit zwei Prompt-Typen:
+
+| Prompt | Baseline (kein Spec-Decode) | ngram-simple | Drafts generiert/akzeptiert |
+|---|---|---|---|
+| Code-Prompt (Original-Repro) | 19,39 tok/s | 19,25 tok/s | 0 / 0 (in 200 Tokens) |
+| Bewusst repetitiv (Zahlen 1-100 ausgeschrieben) | 19,39 tok/s (Referenz) | **17,33 tok/s** | 1 / 1 (in 200 Tokens, mean acc len=2.0) |
+
+**Ergebnis:** Kein messbarer Nutzen, beim repetitiven Prompt sogar **langsamer** als
+die Baseline (reiner Overhead durch N-Gram-Suche ohne kompensierenden Gewinn). Selbst
+der bewusst repetitiv gestaltete Prompt erzeugte über 200 Tokens nur einen einzigen
+angenommenen Draft. Bestätigt die im Plan vorab formulierte Erwartung: M10/M60 sind
+bandbreitengebunden, es fehlt das Rechen-Leerlaufbudget, das Speculative Decoding zum
+Ausnutzen bräuchte — und die getesteten Prompts trafen das erforderliche
+12-Token-N-Gram-Fenster (`size_n=12`) kaum. **Nicht übernommen**, MTP-Denylist (Phase 0)
+bleibt ohne Ersatz — für `qwen35`-Familie also aktuell kein Speculative-Decoding im
+produktiven Einsatz, was angesichts der cuBLAS-Race-Condition (Phase 1) ohnehin die
+richtige, konservative Wahl ist.
