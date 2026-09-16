@@ -511,3 +511,51 @@ auf einen älteren, unvalidierten Stand zurückfällt. Damit ist die gesamte
 Optimierungskampagne (Phase 0-9) abgeschlossen. Einziger offener Punkt bleibt Phase 3s
 Text-only-Hybrid-Konfundierungstest, blockiert durch den hf.co-Registry-Bug — kein
 Blocker für den produktiven Betrieb.
+
+---
+
+## Nachtrag (2026-09-16): Ziel-Topologie korrigiert — N11-M10 zurück zu 4-GPU-Pool,
+## Multi-GPU-FA=ON erneut getestet und stabil befunden
+
+Nutzervorgabe nach Abschluss von Phase 9: N11-M10 soll als **eine gepoolte 4-GPU-
+Instanz** laufen (nicht als 4 Single-GPU-Instanzen, wie in Phase 4 dieser Kampagne
+umgesetzt). N04-RTX soll die beiden M60-GPUs als **eine** Dual-GPU-Instanz nutzen statt
+der bisherigen 3-fach-Nutzung (`ollama-m60-1` + `ollama-m60-2` einzeln +
+`ollama-m60-guard` kombiniert, alle auf denselben 2 physischen GPUs).
+
+**N04-RTX:** `ollama-m60-1` und `ollama-m60-2` entfernt. `ollama-m60-guard` (bereits
+Dual-GPU, FA=OFF) bleibt als einzige M60-Instanz — trägt jetzt sowohl allgemeinen als
+auch Guard-Classifier-Traffic. `.env.m60-single` (nur noch für die entfernten
+Single-Instanzen relevant) entfernt.
+
+**N11-M10:** 4 Single-GPU-Container gestoppt, durch einen gepoolten 4-GPU-Container
+(`ollama`, Port 11434, alle 4 GPUs) ersetzt. Nutzer entschied sich explizit für einen
+**Retest von FA=ON auf diesem Multi-GPU-Pool** statt direkt auf das validierte FA=OFF
+zurückzufallen — Phase 2 hatte Multi-GPU-FA als "nicht validiert/potenziell instabil"
+eingestuft, aber Phase 6s spätere Nachuntersuchung hatte bereits gezeigt, dass eine
+strukturell ähnliche Multi-GPU-Instabilität nicht reproduzierbar war (vermutlich
+transienter Treiberzustand statt Architekturfehler).
+
+**Testverfahren:** `cuda12-maxwell-singlegpu-fa-latest`-Image (FA=ON) auf dem neuen
+4-GPU-Pool, zwei unabhängige Generierungen mit `qwen3.6:35b` (Hybrid-SSM/MoE, derselbe
+Modelltyp, der in Phase 2/6 zu Crashes führte):
+
+| Lauf | Prompt/Seed | HTTP | Layer-Offload | done_reason | Fehler |
+|---|---|---|---|---|---|
+| 1 | Eisenbahn-Zusammenfassung, seed=42 | 200 | 41/42 | length | keine |
+| 2 | Neuronale-Netz-Erklärung, seed=123 | 200 | 41/42 | length | keine |
+
+Beide Läufe: kohärenter, korrekter Output (inkl. `thinking`-Trace bei diesem
+Reasoning-Modell), Container durchgehend `healthy`, keine `illegal memory access`,
+kein Absturz, keine Xid-Fehler im Log. Zusätzlich `smollm3:3b` (dense) als
+Baseline-Kontrolle — ebenfalls sauber.
+
+**Verdict: Multi-GPU-FA=ON auf N11-M10 funktioniert stabil — Korrektur der
+ursprünglichen Phase-2-Einschätzung.** Das deckt sich mit dem bereits in Phase 6
+dokumentierten Muster: die früher beobachtete Multi-GPU-Instabilität war wahrscheinlich
+nie ein FA- oder Architektur-Problem, sondern transienter/korrupter GPU-Treiberzustand
+aus der intensiven Back-to-Back-Testphase dieser Kampagne. N11-M10 läuft jetzt
+produktiv als 4-GPU-Pool mit FA=ON (`compose/docker-compose.maxwell.yml` entsprechend
+aktualisiert). **Trotzdem weiterhin mit Vorsicht behandeln:** Nur 2 Testläufe, kein
+compute-sanitizer-Lauf wie in Phase 1 — bei künftigen Auffälligkeiten (Crash, falscher
+Output) sofort auf `cuda12-maxwell-latest` (FA=OFF) zurückrollen und hier vermerken.
