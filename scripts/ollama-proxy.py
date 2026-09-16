@@ -218,28 +218,86 @@ def get_cached_draft(sha: str) -> int:
     return 0
 
 
-def inject_optimal_options(body: bytes, sha: str) -> bytes:
+# SAFETY DENYLIST (see BUG-hybrid-arch-degeneration.md, Finding 2): the MTP
+# draft path (common_speculative_impl_draft_mtp::draft) crashes with a CUDA
+# "illegal memory access" on Maxwell, non-deterministically, for the
+# qwen3/qwen35(moe) family. auto-optimize.py's own has_mtp() denylist only
+# prevents *that script's* benchmark sweep from picking a nonzero draft — it
+# does nothing for (a) the very first, still-uncached request for a new
+# model, which falls through to the model's own Modelfile default (often
+# nonzero for these families), or (b) a cache entry written *before* this
+# was understood (confirmed live: qwen3.6:35b's N04-RTX cache still carries
+# draft_num_predict=2 from 2026-06-22, well before Finding 2). Mirrored here
+# rather than imported so the proxy has no import-time dependency on
+# auto-optimize.py's own script-execution side effects.
+MTP_CRASH_DENYLIST_ARCH_SUBSTRINGS = ("qwen3", "qwen35")
+
+_family_cache: dict[str, str] = {}
+_family_lock = threading.Lock()
+
+
+def get_model_family(model: str) -> str:
+    """Model architecture family via /api/show, cached in-process."""
+    with _family_lock:
+        if model in _family_cache:
+            return _family_cache[model]
+    family = ""
+    try:
+        req = urllib.request.Request(
+            f"{BACKEND_URL}/api/show",
+            data=json.dumps({"model": model}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            info = json.loads(resp.read())
+            family = info.get("details", {}).get("family", "").lower()
+    except Exception:
+        pass
+    with _family_lock:
+        _family_cache[model] = family
+    return family
+
+
+def is_mtp_denylisted(model: str) -> bool:
+    family = get_model_family(model)
+    return any(s in family for s in MTP_CRASH_DENYLIST_ARCH_SUBSTRINGS)
+
+
+def resolve_draft_n(model: str, sha: str) -> tuple[int, bool]:
+    """Returns (draft_num_predict, forced). forced=True means the MTP crash
+    denylist overrode whatever the cache (or lack thereof) would have said —
+    always 0 in that case, regardless of a stale cache or the model's own
+    Modelfile default."""
+    if is_mtp_denylisted(model):
+        return 0, True
+    return get_cached_draft(sha), False
+
+
+def inject_optimal_options(body: bytes, model: str, sha: str) -> bytes:
     """
-    Inject cached optimal options (draft_num_predict) into request body.
-    Only adds options not already set by the caller.
+    Inject cached optimal options (draft_num_predict) into request body, or
+    force-disable MTP drafting for denylisted families regardless of cache
+    state. Only adds options not already set by the caller — an explicit
+    client-supplied draft_num_predict (e.g. for deliberate crash-risk
+    testing) is always respected.
     """
     try:
         data = json.loads(body)
     except Exception:
         return body
 
-    draft_n = get_cached_draft(sha)
-    if draft_n <= 0:
-        return body
+    if "draft_num_predict" in data.get("options", {}):
+        return body  # caller made an explicit choice — don't override it
 
-    # Don't override if caller explicitly set draft_num_predict
-    opts = data.setdefault("options", {})
-    if "draft_num_predict" not in opts:
-        opts["draft_num_predict"] = draft_n
-        log.debug(f"injected draft_num_predict={draft_n} for sha={sha[:8]}")
-        return json.dumps(data).encode()
+    draft_n, forced = resolve_draft_n(model, sha)
+    if draft_n <= 0 and not forced:
+        return body  # nothing cached, not a denylisted family — leave as-is
 
-    return body
+    data.setdefault("options", {})["draft_num_predict"] = draft_n
+    log.info(f"injected draft_num_predict={draft_n} model={model} sha={sha[:8]}"
+             + (" (MTP crash denylist override, Finding 2)" if forced else ""))
+    return json.dumps(data).encode()
 
 
 # Track model→sha mapping (reduces API calls)
@@ -312,9 +370,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if model:
                 # Run optimization check (fast path: returns sha from cache)
                 sha = maybe_optimize_model(model)
-                # Inject optimal draft settings if cached
+                # Inject optimal draft settings if cached, or force-disable
+                # MTP drafting for denylisted families regardless of cache
                 if sha and body:
-                    body = inject_optimal_options(body, sha)
+                    body = inject_optimal_options(body, model, sha)
 
         # Forward to backend
         # Use longer timeout for inference/generate paths: large models (llama4:scout 62 GB)
