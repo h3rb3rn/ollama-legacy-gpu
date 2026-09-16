@@ -559,3 +559,94 @@ produktiv als 4-GPU-Pool mit FA=ON (`compose/docker-compose.maxwell.yml` entspre
 aktualisiert). **Trotzdem weiterhin mit Vorsicht behandeln:** Nur 2 Testläufe, kein
 compute-sanitizer-Lauf wie in Phase 1 — bei künftigen Auffälligkeiten (Crash, falscher
 Output) sofort auf `cuda12-maxwell-latest` (FA=OFF) zurückrollen und hier vermerken.
+
+---
+
+## Phase 9 — Abschlusszusammenfassung (2026-09-16)
+
+**Status: abgeschlossen.** Zielarchitektur laut Nutzervorgabe live auf allen drei
+Hosts, alle Fixes committet und gepusht (GitHub + git.4noobs.de). Dieser Abschnitt
+fasst den gesamten Rollout-Verlauf zusammen, inkl. der nachträglichen
+Topologie-Korrektur und des während des Rollouts gefundenen MTP-Crash-Fixes.
+
+### Finale Produktions-Topologie
+
+| Host | Konfiguration | Image | Status |
+|---|---|---|---|
+| N11-M10 | 1× gepoolte 4-GPU-Instanz (`ollama`, Port 11434) | `cuda12-maxwell-singlegpu-fa-latest`, FA=ON | ✅ live, 2× stabil mit `qwen3.6:35b` getestet |
+| N04-RTX | 4× Single-GPU M10 (`tesla-1..4`, Port 11436-11439) | `cuda12-maxwell-singlegpu-fa-latest`, FA=ON | ✅ live |
+| N04-RTX | 1× Dual-GPU M60 (`ollama-m60-guard`, Port 11442) | `cuda12-maxwell-latest`, FA=OFF | ✅ live — konsolidiert aus vormals 3 überlappenden M60-Nutzungen (`m60-1`+`m60-2`+`guard`) |
+| N02-M60 | 12× Single-GPU M60 (`gpu0..gpu11`, Port 11434-11445) | `cuda12-maxwell-singlegpu-fa-latest`, FA=ON | ✅ live |
+
+Bewusst außerhalb des Scopes (RTX/GTX-GPUs, Nutzeranweisung): `ollama`/`ollama-rgtx`
+auf N04-RTX (`ollama-github:latest`, eigenes Dockerfile, kein Fork-Image).
+
+### Rollout-Verlauf (chronologisch)
+
+1. **Erster Rollout-Versuch:** Alle 22 Single-GPU-Instanzen auf den offiziell in der
+   CI gebauten `cuda12-maxwell-singlegpu-fa-latest`-Tag umgestellt (vorher: FA=OFF auf
+   N11-M10, lokale Test-Tags auf N02-M60/N04-RTX). N11-M10 zunächst als 4 separate
+   Single-GPU-Container ausgerollt (Fork-Repo-Commit `86d00f9`).
+2. **Topologie-Korrektur (Nutzervorgabe):** N11-M10 zurück auf 1 gepoolte 4-GPU-Instanz
+   umgestellt, FA=ON dabei gezielt erneut getestet (2/2 stabile Läufe mit
+   `qwen3.6:35b`) statt direkt auf FA=OFF zurückzufallen — korrigiert die
+   ursprüngliche Phase-2-Einschätzung (`2a1c110`). N04-RTX: `ollama-m60-1`/`-2`
+   entfernt, nur `ollama-m60-guard` bleibt als einzige M60-Instanz (`9077a63`).
+3. **qwen3.8:27b-Test deckt MTP-Denylist-Lücke auf:** Neues Modell crasht beim Laden
+   auf N11-M10 UND auf N02-M60 (Single-GPU, topologie-unabhängig) mit der exakten
+   Finding-2-Signatur. Root Cause: Ollamas eigener Go-Scheduler erzwingt
+   `--spec-type draft-mtp` beim ersten Laden, unabhängig vom Python-Denylist in
+   `auto-optimize.py` und auch unabhängig von `LLAMA_ARG_SPEC_TYPE`-Env-Var-Overrides
+   (`c433244`).
+4. **Vollständige Root-Cause-Klärung:** Der eigentliche steuerbare Hebel ist
+   `draft_num_predict`, nicht `--spec-type`. `qwen3.8:27b` und die bereits
+   existierende `-nospec`-Variante nutzen denselben GGUF-Blob — einziger Unterschied
+   ist der Modelfile-Parameter (`draft_num_predict 4` vs. `0`). Direkt verifiziert:
+   expliziter `draft_num_predict=0`-Override auf der Plain-Variante verhindert den
+   Crash zuverlässig (`2b50f74`).
+5. **Proxy-Fix implementiert und ausgerollt:** `ollama-proxy.py` erzwingt jetzt
+   `draft_num_predict=0` für `qwen3`/`qwen35(moe)`-Familien bei **jedem** Request —
+   auch bei fehlendem Cache (Erstladung) und bei bereits bestehenden, veralteten
+   Cache-Einträgen mit riskantem Wert (`51bae38`). Konkret bestätigt: N04-RTXs
+   Auto-Optimize-Cache für `qwen3.6:35b` trug seit 2026-06-22 `draft_num_predict=2` —
+   dieselbe crash-fähige Konfiguration, unbemerkt produktiv im Einsatz, vermutlich nur
+   durch Zufall (nicht-deterministische Race Condition) nie gecrasht.
+   Hot-Deploy auf alle 18 Fork-Image-Container (N11-M10: 1, N04-RTX: 5, N02-M60: 12)
+   noch vor dem nächsten CI-Rebuild, damit der Fix sofort wirksam ist.
+
+### Betriebsstörung während des Rollouts (selbst verursacht, behoben)
+
+Der Hot-Deploy-Schritt (`docker cp` der gepatchten `ollama-proxy.py` in alle 18
+laufenden Container) verlor dabei das Executable-Bit der Datei — der Proxy startete
+dadurch auf keinem der 18 Container, Port 11434 war für ~3-5 Minuten auf allen
+betroffenen Hosts nicht erreichbar (`entrypoint`-Log zeigte fälschlich
+"OLLAMA_AUTO_OPTIMIZE=0", tatsächliche Ursache war die fehlende `+x`-Berechtigung).
+Sofort erkannt (Healthcheck-Status "unhealthy"), mit `chmod +x` + Container-Neustart
+auf allen 18 Containern behoben. Alle wieder `healthy`, Fix verifiziert funktionsfähig.
+**Lehre für künftige Hot-Deploys:** nach `docker cp` immer `chmod +x` auf ausführbare
+Skripte nachziehen, nicht auf das Kopierverhalten verlassen.
+
+### Bekannte offene Punkte
+
+- **RTX-Pool (`ollama`, N04-RTX, Port 11434) bleibt beim MTP-Crash-Risiko
+  ungeschützt.** Dieser Container nutzt ein anderes Image (`ollama-github:latest`,
+  eigenes `Dockerfile.github`) **ohne** die `ollama-proxy.py`-Infrastruktur überhaupt
+  (bestätigt: kein Proxy-Prozess läuft dort, nur nacktes `ollama serve`). Der
+  Fix lässt sich dort nicht per Hot-Patch anwenden — bräuchte entweder eine eigene
+  Proxy-Ergänzung für dieses Image oder eine Modelfile-Anpassung
+  (`draft_num_predict 0`) direkt für die dort referenzierten qwen35-Modelle. Bewusst
+  nicht umgesetzt, da außerhalb des für diese Kampagne festgelegten Scopes
+  (RTX/GTX-GPUs) — **aber die dort dokumentierte 24,3-tok/s-Referenzzahl für
+  `qwen3.6:35b` (CLAUDE.md) läuft nach wie vor mit ungeschütztem `draft_num_predict=2`,
+  also mit demselben Crash-Risiko wie `qwen3.8:27b` vor dem heutigen Fix.**
+- Phase 3s Text-only-Hybrid-Konfundierungstest bleibt blockiert durch den
+  hf.co-Registry-Bug (unverändert seit Phase 3).
+- `qwen3.8:27b` (Plain-Tag) bleibt technisch geladen und nutzbar — läuft jetzt über
+  den Proxy-Fix sicher, aber langsamer als mit MTP (kein Benchmark-Vergleich in dieser
+  Kampagne durchgeführt).
+
+### Commits dieser Phase
+
+Fork-Repo (GitHub, `h3rb3rn/ollama-legacy-gpu`): `86d00f9`, `2a1c110`, `c433244`,
+`2b50f74`, `51bae38`.
+Deployment-Repo (git.4noobs.de, `h3rb3rn/ollama`): `82cc26b`, `9077a63`.
