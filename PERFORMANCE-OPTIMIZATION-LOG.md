@@ -219,6 +219,41 @@ nicht sicher. Ein Pool-Deployment für N02-M60 sollte, falls gewünscht, vorerst
 FA=OFF aufgesetzt werden (analog zur N11-M10-Multi-GPU-Test-Compose), nicht mit dem
 `-fa-test`-Image.
 
-**N04-RTX:** noch nicht angefasst — laut Plan erst nach Abschluss der übrigen Phasen, da
-dieser Host den `OLLAMA_FAST_GPU_DEVICES`/`selectGPUPool()`-Mechanismus aktiv nutzt und
-eine andere, sorgfältigere Anpassung braucht als das einfache Ersetzen auf N02-M60.
+---
+
+## Phase 4 (Teil 2) — N04-RTX aktualisiert
+
+**Status: abgeschlossen**
+
+N04-RTX ist ein deutlich sensiblerer Host: neben mehreren Ollama-Test-Containern läuft
+dort eine produktive Nicht-Ollama-Anwendung (`terra_*`-Stack: Node-Client/-Server,
+Postgres, Redis, Mailhog). Der Auto-Mode-Sicherheits-Classifier hat das korrekt als
+Produktivsystem erkannt und initiale Aktionen dort blockiert (sogar lesendes
+`docker ps`) — auf explizite Nutzerfreigabe hin fortgesetzt.
+
+**Nur die Tesla-basierten Fork-Container aktualisiert** (`ollama-tesla-1..4`,
+`ollama-m60-1`, `ollama-m60-2`, `ollama-m60-guard`) — mit demselben validierten
+Fix-Set wie N02-M60 (Single-GPU-Container: `cuda12-maxwell-fa-test`-Image, Thread-Fix,
+`LLAMA_ARG_MMPROJ_OFFLOAD=false`, FA=ON; der 2-GPU-Pool-Container `ollama-m60-guard`:
+frisches `-latest` mit Phase-0-Fixes, FA=OFF wie bisher). Bestehende Ports/GPU-
+Zuordnungen/Context-Length (32768, abweichend von den 65536 auf den Testhosts —
+bewusst beibehalten, das war der produktive Wert) unverändert übernommen.
+
+**Explizit NICHT angefasst** (auf Nutzeranweisung): `ollama` (Port 11434) und
+`ollama-rgtx` (Port 11435) — laufen mit `ollama-github:latest` (offizielles Ollama,
+nicht dieser Fork) auf den RTX/GTX-GPUs. Ebenso unangetastet: der gesamte
+`terra_*`-Stack, `ollama-0240-m10`/`ollama-0240-m60` (bewusste Stock-Ollama-
+Vergleichsbaseline), `open-webui`, `searxng`.
+
+End-to-End verifiziert auf `ollama-tesla-1`: 34/34 Layer, FA aktiv, korrekter
+Output. Damit ist Phase 4 (Rollout auf alle drei Test-/Produktionshosts dieser
+Kampagne — N11-M10, N02-M60, N04-RTX) abgeschlossen.
+
+### Nachtrag: FA=ON jetzt offiziell als CI-Tag veröffentlicht
+
+Der bis hierhin nur lokal gebaute `cuda12-maxwell-fa-test` war nie im Dockerfile
+committet. Nachgeholt: `GGML_CUDA_FA` ist jetzt ein Build-Arg (Default weiterhin OFF,
+ändert nichts am Verhalten bestehender Multi-GPU-Pool-Deployments), CI baut zusätzlich
+den Tag `cuda12-maxwell-singlegpu-fa-latest` mit FA=ON. Zukünftige Single-GPU-Rollouts
+können diesen Tag direkt pullen statt manuell lokale Images per `docker save`/`scp`/
+`docker load` zu verteilen.
