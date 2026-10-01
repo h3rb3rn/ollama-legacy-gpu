@@ -107,7 +107,7 @@ Local validation:33 release/validation tests plus8 compatibility tests passed;
 both Actions workflows passed actionlint; git diff whitespace checks passed.
 The pushed upstream-sync run is
 [36921557374](https://github.com/h3rb3rn/ollama-legacy-gpu/actions/runs/36921557374).
-The final source push triggers a new run with the isolated CUDA12 overlay.
+The final source push triggered [36932188402](https://github.com/h3rb3rn/ollama-legacy-gpu/actions/runs/36932188402)\nwith the isolated CUDA12 overlay (source commit41d5cb5). It is pending behind\nthe previous run; CUDA11 and CUDA12 in that previous run have succeeded, while\nCUDA13 is still building. This does not yet qualify the new CI overlay.
 
 Actions builds CUDA11/12/13 candidates. CUDA11 hardware remains untested.
 Without a configured GPU inventory these are candidate builds, not automatic
@@ -125,6 +125,7 @@ with the same immutable0.35.0 images, Q4 KV and Flash Attention enabled.
 The final audit confirms all14 APIs remain0.35.0, all twelve Tesla services
 healthy with zero restarts, and the two Stock container identities unchanged.
 
+The Q4 rollout used batch64, seed42, temperature0 and256 decode tokens.
 Every Tesla case passed the actual CUDA capability probe, existing-model
 correctness/baseline check and256-token generation. Actual K(q4_0)/V(q4_0)
 allocation was required in each runner log. This does not prove every graph
