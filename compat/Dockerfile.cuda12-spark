@@ -1,0 +1,13 @@
+# Optional overlay for N02's existing Spark2.5 workload. The API stays0.35.0;
+# the ordinary Spark backend is the pinned, proven0.34.1 Maxwell artifact.
+# This is not a replacement for building an updated upstream native backend.
+# Compatible GPU targets for this fallback: sm50/sm52 only, FA enabled.
+ARG BONSAI_IMAGE
+ARG COMPAT_IMAGE=ghcr.io/h3rb3rn/ollama-legacy@sha256:555ed9806a68d9d09ba1f61844ade4f79feea71d342fdacb87455c2783ef81c6
+FROM ${COMPAT_IMAGE} AS compat
+FROM ${BONSAI_IMAGE}
+COPY --from=compat /usr/lib/ollama/ /opt/ollama-spark-compat/
+RUN mv /usr/lib/ollama/llama-server /usr/lib/ollama/llama-server-bonsai
+COPY --chmod=755 compat/llama-server-dispatch.py /usr/lib/ollama/llama-server
+LABEL ollama.spark-compat.backend="pinned-0.34.1-Maxwell-sm50-sm52" \
+      ollama.spark-compat.scope="ordinary-spark2_5-only; Bonsai-retains-Prism"

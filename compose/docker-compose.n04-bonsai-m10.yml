@@ -1,8 +1,8 @@
-# Qualified local image on N04. Never pull an untested moving tag.
+# Qualified local Ollama0.35.0 image on N04. Never pull an untested moving tag.
 # Start only this service; the old single-M10 service definitions are obsolete.
 services:
   ollama-tesla-bonsai:
-    image: sha256:c5ae3f17cfd9bc116dacc141bb5562bc92732aaf190e0ab3d3968a60f5aa24ab
+    image: sha256:1170395e1eca4bc1c330642c2b63118bb32f3c029b20342c64420b05516b7485
     pull_policy: never
     container_name: ollama-tesla-bonsai
     command: [serve]
@@ -18,7 +18,7 @@ services:
       OLLAMA_NUM_PARALLEL: "1"
       OLLAMA_LOAD_TIMEOUT: "30m"
       OLLAMA_FLASH_ATTENTION: "true"
-      OLLAMA_KV_CACHE_TYPE: "q8_0"
+      OLLAMA_KV_CACHE_TYPE: "q4_0"
       OLLAMA_SCHED_SPREAD: "true"
       OLLAMA_GPU_AUTODETECT: "0"
       OLLAMA_AUTO_OPTIMIZE: "0"

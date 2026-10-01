@@ -63,7 +63,7 @@ Each host JSON file contains:
     "container": "ollama-tesla-bonsai",
     "port": 11436,
     "bind_ip": "",
-    "kv_type": "q8_0"
+    "kv_type": "q4_0"
   }
 }
 ```

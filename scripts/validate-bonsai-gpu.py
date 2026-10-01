@@ -8,6 +8,7 @@ API health response alone is not sufficient. Emits a JSON evidence artifact.
 """
 import argparse
 import datetime
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -149,6 +150,15 @@ def main():
         full_log = logs.stdout + logs.stderr
         args.output.with_suffix('.runner.log').write_text(full_log)
         evidence['layers'] = validate_logs(full_log, args.kv_type, args.context)
+        row = json.loads(docker('inspect', args.container))[0]
+        if row['Config'].get('Labels', {}).get('ollama.spark-compat.backend'):
+            # CUDA12 release overlays carry an ordinary Spark fallback. Require
+            # per-process native library isolation while real inference is loaded.
+            path = Path(__file__).resolve().parents[1] / 'compat/validate-backends.py'
+            spec = importlib.util.spec_from_file_location('backend_isolation', path)
+            isolation = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(isolation)
+            evidence['backend_libraries'] = isolation.validate_maps(args.container)
         if fingerprint(args.container) != original:
             raise RuntimeError('Candidate identity or restart count changed')
     except Exception as exc:

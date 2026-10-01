@@ -4,12 +4,14 @@ Ollama runtime and Docker builds for NVIDIA legacy and current GPUs, including
 native integration of the [Prism Bonsai demo](https://github.com/PrismML-Eng/Bonsai-demo)
 and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf).
 
-**Verified status, 2026-10-01:** Bonsai PQ2_0 inference and quantized KV caches
-passed on Tesla M10/M60. M10 production on N04 uses Q8 KV at190k context.
-M60 Q4 testing passed; its original F16 production service was restored.
+**Verified status, 2026-10-01:** all 14 fleet instances report Ollama 0.35.0.
+Twelve Tesla services run the fork with **Q4 KV + Flash Attention by default**;
+N04 ports 11434/11435 retain official Stock.
+CUDA12 Bonsai PQ2_0 inference passed on M10 (Q8, 190k) and M60 (Q4, 190k;
+Q8, 131k). Original production GPU assignments and shared model pools remain.
 CUDA11 has compiled successfully but remains **untested on GPU hardware**.
-The CUDA12 Bonsai build for **Ollama0.35.0** compiled successfully; the runtime
-results below use the qualified **0.34.1** image, not0.35.0.
+RTX performance results below refer to the earlier 0.34.1 fork qualification.
+See [the final fleet report](FLEET-ROLLOUT-0.35.0-2026-10-01.md).
 
 ## GPU compatibility
 
@@ -22,8 +24,8 @@ The authoritative matrix is [presets/gpu-targets.json](presets/gpu-targets.json)
 | --- | --- | --- | --- | --- |
 | CUDA11.8 `cuda11-legacy` | 3.7 | Tesla K80 | No GeForce model claimed for CC3.7 | **Untested**; compilation passed, F16 KV /FAOFF |
 | CUDA11.8 `cuda11-legacy` | 5.0,5.2 | Tesla M10, M60, M40 | GTX750/750Ti; GTX950/960/970/980/980Ti; Maxwell TITAN X | **Untested with CUDA11**; compiled targets only |
-| CUDA12.0 `cuda12-maxwell` | 5.0 | Tesla M10 | GTX750/750Ti | **M10 tested:** Bonsai Q8/Q4, four GPUs,190k; gamer cards untested |
-| CUDA12.0 `cuda12-maxwell` | 5.2 | Tesla M60, M40 | GTX950/960/970/980/980Ti; Maxwell TITAN X | **M60 tested:** Bonsai Q4, two GPUs,190k; gamer cards/M40 untested |
+| CUDA12.0 `cuda12-maxwell` | 5.0 | Tesla M10 | GTX750/750Ti | **M10 tested:** 0.35 Q8 stability / Q4 rollout, four GPUs,190k; gamer cards untested |
+| CUDA12.0 `cuda12-maxwell` | 5.2 | Tesla M60, M40 | GTX950/960/970/980/980Ti; Maxwell TITAN X | **M60 tested:** 0.35 Q4/190k and Q8/131k, two GPUs; gamer cards/M40 untested |
 | CUDA12.0 `cuda12-maxwell` | 6.0,6.1 | Tesla P100, P4, P40 | GTX1050/1050Ti/1060/1070/1070Ti/1080/1080Ti; Pascal TITAN X/Xp | Compiled targets, **fork inference untested** |
 | CUDA12.0 `cuda12-maxwell` | 7.0 | Tesla V100 | TITAN V | Compiled target, **untested** |
 | CUDA13 `cuda13-rtx` | 7.5 | T4 | GTX16 series; RTX20 series; TITAN RTX | **RTX2060 tested** with Bonsai Q4 at256k; other cards untested |
@@ -45,7 +47,7 @@ Sources: [NVIDIA legacy compute capabilities](https://developer.nvidia.com/cuda/
 
 The demo's NVIDIA path uses Prism llama.cpp; its separate MLX path targets
 Apple Silicon. This fork integrates the NVIDIA backend into ordinary Ollama
-APIs rather than launching the demo's standalone server.
+APIs, without launching the demo's standalone server.
 
 - `BONSAI=ON` replaces the complete native backend with checksum-verified Prism
   commit `adfffbe41b2cabcd51fff326ab045662265062bb` from
@@ -70,11 +72,54 @@ See [BONSAI.md](BONSAI.md) for build/import instructions and the
 [demo runtime/code audit](BONSAI-DEMO-RUNTIME-AUDIT-2026-09-29.md) for the verified
 MLX/Prism paths and Flash Attention differences.
 
+## KV cache configuration
+
+Configuration is the same as Stock Ollama and independent of model weight
+quantization. The server-wide default is F16; installing the fork does not
+automatically enable quantization. The deployed Tesla fleet defaults to Q4; set the container environment:
+
+```yaml
+environment:
+  OLLAMA_FLASH_ATTENTION: "1"
+  OLLAMA_KV_CACHE_TYPE: q4_0
+```
+
+Use `q8_0` for Q8 or `f16` for the upstream default. Recreate the container after
+changing its Compose environment. The setting applies to all models served by
+that instance, not a per-model Modelfile parameter. Context size remains a
+separate setting (`OLLAMA_CONTEXT_LENGTH` / request `num_ctx`).
+All twelve Tesla production services now use Q4 with FA enabled, including
+N04:11436 at190k. Q4 is configured in deployment profiles; upstream's unset
+environment default remains F16.
+N04 Stock ports11434/11435 use Q4.
+See [Ollama's FAQ](https://github.com/ollama/ollama/blob/main/docs/faq.mdx).
+
 ## Actual Bonsai PQ2_0 hardware results
 
 Model: `bonsai2:27b-pq2_0`; one request at a time; batch128, seed42,
 temperature0. Maxwell requests190000 context, allocated as190208.
 The cache capacity was allocated; tests did **not** fill all190k/256k slots.
+
+**Ollama 0.35.0, CUDA12, native hardware qualification:**
+
+| GPUs on N04 | KV | Allocated context | KV total | Repeated 128-token decode | 2048-token stability |
+| --- | --- | --- | --- | --- | --- |
+| Four Tesla M10 | Q8_0 | 190208 | 6.17 GiB | 1.213 / 1.806 tok/s | 1.648 tok/s |
+| Two Tesla M60 | Q4_0 | 190208 | 3.27 GiB | 7.319 / 7.357 tok/s | 7.079 tok/s |
+| Two Tesla M60 | Q8_0 | 131072 | 4.25 GiB | 7.333 / 7.313 tok/s | 7.102 tok/s |
+
+All three passed arithmetic437/763, actual CUDA cache capability checks and
+65/65 model-layer offload. The final serialized M10 production replacement
+also passed a fresh 256-token test at1.793 tok/s. Qualification runs partly
+overlapped; these measurements do not isolate hardware bottlenecks.
+M60 Q8 at190k did not fit fully on these two GPUs (53/65 layers), so it was
+stopped and is not qualified. M60 ordinary Qwen regression passed Q4 and Q8
+with2048-token stability at18.191/18.375 tok/s.
+M10 Q4 on0.35 passed the new256-token rollout check at1.798tok/s, with
+65/65 GPU layers and3.27GiB KV. Its long2048-token Q4 result below remains
+the historical0.34.1 qualification.
+
+**Historical Ollama 0.34.1 results:**
 
 | GPUs on N04 | KV type | Context | KV total | Repeated128-token decode | 2048-token stability |
 | --- | --- | --- | --- | --- | --- |
@@ -83,12 +128,8 @@ The cache capacity was allocated; tests did **not** fill all190k/256k slots.
 | Two Tesla M60, temporary production test | Q4_0 | 190k | 3.27GiB | 7.517 /7.508tok/s | 7.236tok/s |
 | Two RTX2060 +two RTX3060, fork qualification | Q4_0 | 256k | 4.50GiB | 21.557 /21.491tok/s | 20.802tok/s |
 
-M10/M60 quantized-cache tests passed arithmetic437 and763 and65/65 GPU model
-layers, with no CUDA allocation errors or container restarts. Ordinary
-`qwen3.5:4b` regression passed on M10 with both cache types. M60 actual Q8
-inference and its ordinary-model regression remain outstanding. Two arithmetic
-answers do not constitute a comprehensive quantization quality evaluation;
-layer offload does not by itself prove every graph operation runs on GPU.
+Two arithmetic answers do not constitute a comprehensive quantization quality
+evaluation; layer offload alone does not prove every graph operation runs on GPU.
 
 M10 F16 KV previously used11.61GiB: Q8 saves46.875%, Q4 saves71.875% of **KV
 memory**, not of total model/runtime memory. No M60 F16 speed baseline was
@@ -102,28 +143,28 @@ Reports and reproducible evidence:
 - [M60 Q4 production test and restoration](BONSAI-M60-PRODUCTION-Q4-2026-10-01.md).
 - [RTX Flash Attention validation](BONSAI-RTX-FA-VALIDATION-2026-09-30.md).
 - [PQ2 performance analysis](BONSAI-PQ2-PERFORMANCE-2026-09-30.md).
-- [Machine-readable test evidence](tests/evidence/README.md).
+- [Historical machine-readable test evidence](tests/evidence/README.md).
+- [0.35.0 fleet and native evidence](docs/evidence/fleet-v035-20261001/README.md).
+- [Isolated Spark2.5 compatibility backend](compat/README.md).
 
 Current deployment differs from test topology: N04 ports11434/11435 now run
 **Stock Ollama0.35.0** at the user's request. Port11436 remains the qualified
-Bonsai fork with Q8. M60 port11442 was restored to its original F16 service.
+Bonsai fork, now with Q4. M60 port11442 also runs the0.35 fork with Q4.
 All share `/opt/ollama/models:/root/.ollama`; no duplicate model pool is needed.
 See [Stock deployment verification](STOCK-N04-DEPLOYMENT-2026-10-01.md).
 
 ## Build and import
 
-Build the previously hardware-qualified Maxwell version:
+Build the hardware-qualified Maxwell version:
 
 ```bash
 docker build -f dockerfiles/Dockerfile.cuda12-maxwell \
-  --build-arg OLLAMA_VERSION=v0.34.1 --build-arg BONSAI=ON \
+  --build-arg OLLAMA_VERSION=v0.35.0 --build-arg BONSAI=ON \
   --build-arg 'CUDA_ARCHITECTURES=50-real;52-real' \
   --build-arg GGML_CUDA_FA=ON --build-arg JOBS=4 \
   -t ollama-bonsai:local-maxwell .
 ```
 
-Use `v0.35.0` for the new version; its broad CUDA12 build compiled locally,
-while hardware qualification remains necessary before production replacement.
 For a tested N04 runtime configuration see
 [the M10 Compose manifest](compose/docker-compose.n04-bonsai-m10.yml).
 Its pinned local image ID exists on N04; build/import a verified image first
@@ -161,6 +202,7 @@ See [GPU-RELEASE-AUTOMATION.md](GPU-RELEASE-AUTOMATION.md) for runner/config set
 
 ```bash
 python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s compat -p 'test_*.py' -v
 bash -n compose/update.sh
 git diff --check
 ```
@@ -168,6 +210,8 @@ git diff --check
 The build additionally runs Go GGUF parser and legacy batch-cap tests against
 the selected Ollama release. Recorded native builds: CUDA11/Ollama0.34.1,
 CUDA12/Ollama0.34.1, CUDA13/Ollama0.34.1 and CUDA12/Ollama0.35.0.
+The CUDA12 Actions job adds the isolated Maxwell Spark compatibility overlay
+from its exact native candidate digest; per-process library checks reject mixing.
 GPU evidence is historical and image-specific; it does not qualify every future
 release or every gamer card in the compatibility table.
 

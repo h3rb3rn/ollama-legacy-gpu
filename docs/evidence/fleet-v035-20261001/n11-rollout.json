@@ -1,0 +1,53 @@
+[
+  {
+    "name": "ollama",
+    "port": "11434",
+    "image": "sha256:b32e6885fd96fc827611d315424cfd44eaa73d259d141df4517beaf0e54b2c63",
+    "previous_id": "828c68e9338495b3cdcb0d80965628a7aa5b2e297f21751cb7eeaf750312fdbc",
+    "rollback_container": "ollama-pre-v035-20261001-203618",
+    "passed": true,
+    "phase": "complete",
+    "version": {
+      "version": "0.35.0"
+    },
+    "container_id": "30ecf54149b63de369ae44d0162e35f9558f9a713e64235abaa110b7ec8b3c89",
+    "measurements": [
+      {
+        "model": "qwen3.6:35b",
+        "context": 190000,
+        "response": "437",
+        "eval_count": 256,
+        "tokens_per_second": 6.87191760270148,
+        "size_vram": 23964648728
+      }
+    ],
+    "layers": [
+      [
+        "41",
+        "42"
+      ]
+    ],
+    "settings_preserved": true,
+    "loaded": [
+      {
+        "name": "qwen3.6:35b",
+        "model": "qwen3.6:35b",
+        "size": 25074388163,
+        "digest": "07d35212591fc27746f0a317c975a6d68754fb38e9053d82e25f06057af28522",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen35moe",
+          "families": [
+            "qwen35moe"
+          ],
+          "parameter_size": "36.0B",
+          "quantization_level": "Q4_K_M"
+        },
+        "expires_at": "2026-10-02T20:39:04.36463398Z",
+        "size_vram": 23964648728,
+        "context_length": 190000
+      }
+    ]
+  }
+]

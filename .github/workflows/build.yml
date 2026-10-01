@@ -9,6 +9,7 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'patches/bonsai/**'
+      - 'compat/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
     inputs:
@@ -43,7 +44,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run release guard regressions
-        run: python3 -m unittest discover -s tests -v
+        run: |
+          python3 -m unittest discover -s tests -v
+          python3 -m unittest discover -s compat -p 'test_*.py' -v
       - name: Resolve a published upstream release
         id: resolve
         env:
@@ -110,7 +113,7 @@ jobs:
             CUDA_ARCHITECTURES=${{ matrix.architectures }}
             GGML_CUDA_FA=${{ matrix.flash_attention }}
             JOBS=4
-          tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
+          tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}-native
           cache-from: type=gha,scope=bonsai-${{ matrix.variant }}-v2
           cache-to: type=gha,scope=bonsai-${{ matrix.variant }}-v2,mode=max
           labels: |
@@ -118,9 +121,22 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.description=Ollama with pinned Prism Bonsai runtime; ${{ matrix.description }}
+      - name: Preserve ordinary Spark2.5 on Maxwell with isolated libraries
+        id: compat
+        if: matrix.variant == 'cuda12-maxwell'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: compat/Dockerfile.cuda12-spark
+          push: true
+          build-args: |
+            BONSAI_IMAGE=${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
+          cache-from: type=gha,scope=maxwell-spark-compat-v1
+          cache-to: type=gha,scope=maxwell-spark-compat-v1,mode=max
       - name: Record exact candidate digest
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.compat.outputs.digest || steps.build.outputs.digest }}
           VARIANT: ${{ matrix.variant }}
         run: |
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1

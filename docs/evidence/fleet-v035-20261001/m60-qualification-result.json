@@ -1,0 +1,31 @@
+{
+  "passed": true,
+  "image": "sha256:1170395e1eca4bc1c330642c2b63118bb32f3c029b20342c64420b05516b7485",
+  "checks": [
+    {
+      "cache": "q4_0",
+      "kind": "bonsai",
+      "context": 190000,
+      "evidence": "m60-q4_0-bonsai.json"
+    },
+    {
+      "cache": "q4_0",
+      "kind": "ordinary",
+      "context": 4096,
+      "evidence": "m60-q4_0-ordinary.json"
+    },
+    {
+      "cache": "q8_0",
+      "kind": "bonsai",
+      "context": 131072,
+      "evidence": "m60-q8_0-bonsai.json"
+    },
+    {
+      "cache": "q8_0",
+      "kind": "ordinary",
+      "context": 4096,
+      "evidence": "m60-q8_0-ordinary.json"
+    }
+  ],
+  "q8_190k": "Stopped: 53/65 GPU layers; this two-GPU configuration was not qualified"
+}
