@@ -1,0 +1,57 @@
+{
+  "passed": true,
+  "target": "n04-m10",
+  "family": "m10",
+  "variant": "cuda12-maxwell",
+  "image": "ollama-bonsai:maxwell-fa-20260930",
+  "image_id": "sha256:c5ae3f17cfd9bc116dacc141bb5562bc92732aaf190e0ab3d3968a60f5aa24ab",
+  "config_sha256": "1aca8b6279a8dde8932b1ef7eb495f281807b65e8307953eaffe7ba017c38052",
+  "local_image": true,
+  "hardware": {
+    "GPU-f668b685-3c6d-0fc7-1f85-960a0607c561": {
+      "name": "Tesla M10",
+      "capability": 50,
+      "used_mib": 0
+    },
+    "GPU-086bd19b-5a4c-a6dc-8c82-9c1a5276b0b2": {
+      "name": "Tesla M10",
+      "capability": 50,
+      "used_mib": 0
+    },
+    "GPU-7b3bd39b-b948-09a6-8ef9-756406efdb99": {
+      "name": "Tesla M10",
+      "capability": 50,
+      "used_mib": 0
+    },
+    "GPU-113fd30d-cb6f-ad02-0803-2c2b9053709d": {
+      "name": "Tesla M10",
+      "capability": 50,
+      "used_mib": 0
+    }
+  },
+  "checks": [
+    {
+      "cache": "q8_0",
+      "kind": "bonsai",
+      "evidence": "q8_0-bonsai.json"
+    },
+    {
+      "cache": "q8_0",
+      "kind": "ordinary",
+      "evidence": "q8_0-ordinary.json"
+    },
+    {
+      "cache": "q4_0",
+      "kind": "bonsai",
+      "evidence": "q4_0-bonsai.json"
+    },
+    {
+      "cache": "q4_0",
+      "kind": "ordinary",
+      "evidence": "q4_0-ordinary.json"
+    }
+  ],
+  "version": {
+    "version": "0.34.1"
+  }
+}

@@ -1,45 +1,40 @@
-# dockerfiles/Dockerfile.cuda11-legacy
+# dockerfiles/Dockerfile.cuda13-rtx
 #
-# Ollama for Tesla K80 (CC 3.7, Kepler) + Tesla M10/M60 (CC 5.2, Maxwell)
-# CUDA 11.8 — last CUDA version with official CC 3.7 support
+# Ollama for RTX Turing/Ampere GPUs (Compute Capability 7.5/8.6)
+# CUDA 13.0.0
 #
-# Since Ollama dropped CUDA 11 presets after v0.30.x, this Dockerfile injects
-# our own presets from presets/cuda11-presets.json into the Ollama source tree.
-# The injection is non-destructive: existing presets are left untouched.
+# This target is for the N04 RTX 2060 (sm75) and RTX 3060 (sm86) pool.
 #
-# PTX-JIT note: 37-virtual;50-virtual;52-virtual → kernels are JIT-compiled on
-# first model load (~5 s) and then cached in ~/.ollama/cuda-cache.
-#
-# Build:
-#   docker build -f dockerfiles/Dockerfile.cuda11-legacy \
-#     --build-arg OLLAMA_VERSION=v0.9.0 \
-#     --build-arg JOBS=8 \
-#     -t ghcr.io/<owner>/ollama-legacy:cuda11-legacy-v0.9.0 .
+# BONSAI=ON overlays the pinned Prism backend onto the selected Ollama release.
 #
 # Optional build args:
-#   CUDA_ARCHITECTURES  NVCC target list (default: Kepler + Maxwell + all newer up to Ampere)
+#   CUDA_ARCHITECTURES  NVCC target list (default: Turing and Ampere RTX)
 #   JOBS                Parallel build jobs
 
-ARG CUDA11_VERSION=11.8.0
+ARG CUDA13_VERSION=13.0.0
 ARG CMAKE_VERSION=3.31.7
-# Optional: use a custom llama.cpp fork instead of the version bundled with Ollama.
-# Set to "https://github.com/h3rb3rn/llama.cpp-legacy-gpu.git" to use our fork
-# with native greedy fill + bandwidth-weighted budgets (no Python patches needed).
-# Set to "" (empty) to use Ollama's bundled llama.cpp version (default).
+# NOT CURRENTLY WIRED IN for this Dockerfile — kept only because CI/README
+# still pass/document it and removing the ARG would break that invocation.
+# See the long comment near the cmake configure step below for why: Ollama's
+# own compat-patch step doesn't apply cleanly against this fork's diverged
+# history. This fork's actual fixes ship as Python patch scripts instead
+# (patch-llama-jinja-tojson.py, patch-llama-tier-fitting.py), applied to
+# Ollama's normally-fetched llama.cpp, same as always.
 ARG LLAMA_CPP_FORK=""
 
 # ── Stage 1: Build toolchain ──────────────────────────────────────────────────
-# Using devel-ubuntu22.04 base to automatically get GCC 11, which supports
-# both Cooperlake (-mavx512bf16) and Alderlake (-mavxvnni) CPU backend targets.
-FROM nvidia/cuda:${CUDA11_VERSION}-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:${CUDA13_VERSION}-devel-ubuntu22.04 AS builder
 
 ARG OLLAMA_VERSION=main
 ARG BONSAI=OFF
-ARG CUDA_ARCHITECTURES="37-virtual;50-virtual;52-virtual"
+ARG CUDA_ARCHITECTURES="75-real;86-real"
 ARG JOBS=8
 ARG CMAKE_VERSION=3.31.7
 # LLAMA_CPP_FORK must be re-declared inside the stage to be visible in RUN commands.
 ARG LLAMA_CPP_FORK=""
+# Compile CUDA Flash Attention for RTX, including the q4_0 KV-cache path.
+# The runtime flag cannot enable kernels omitted at build time.
+ARG GGML_CUDA_FA=ON
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_GENERATOR=Ninja
@@ -57,7 +52,7 @@ COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
 COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
-COPY scripts/prepare-bonsai.py            /tmp/prepare-bonsai.py
+COPY scripts/prepare-bonsai.py           /tmp/prepare-bonsai.py
 COPY patches/bonsai                     /tmp/bonsai-patches
 
 WORKDIR /src
@@ -72,48 +67,64 @@ RUN GO_VER=$(awk '/^go / { print $2 }' go.mod) \
        | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/usr/local/cuda/bin:$PATH"
 
+# Bonsai's quantized weights require the Prism graph transforms as well as
+# private GGML types. Keep the whole native payload on one pinned source tree.
+# Each selected Ollama release must apply the compatibility patches and pass
+# the GGUF regression suite; native build and hardware validation follow.
 RUN case "${BONSAI}" in \
-      ON) python3 /tmp/prepare-bonsai.py /src --patches /tmp/bonsai-patches --cuda-version 11 \
+      ON) python3 /tmp/prepare-bonsai.py /src --patches /tmp/bonsai-patches --cuda-version 13 \
           && go test ./fs/gguf ;; \
       OFF) ;; \
       *) echo 'BONSAI must be ON or OFF' >&2; exit 1 ;; \
     esac
 
-# Inject CUDA 11 preset (adds llama_cuda_v11_linux to llama/server/CMakePresets.json)
-COPY presets/cuda11-presets.json /tmp/cuda11-presets.json
-COPY scripts/inject-presets.py   /tmp/inject-presets.py
-RUN python3 /tmp/inject-presets.py \
-    --source  /src \
-    --presets /tmp/cuda11-presets.json
+# NOTE on LLAMA_CPP_FORK: this build-arg is declared (and documented in
+# README.md/CI) as a way to swap in this project's llama.cpp fork instead of
+# Ollama's pinned upstream version, but it is intentionally NOT wired into the
+# cmake configure step below. Attempted this directly via
+# -DFETCHCONTENT_SOURCE_DIR_LLAMA_CPP — it works at the CMake level, but
+# Ollama's own build applies a compat patch (llama/compat/001-llama-cpp-hooks.patch,
+# via cmake/apply-git-patches.cmake) targeted at its pinned upstream commit,
+# and that patch does not apply cleanly against our fork's diverged history
+# (fails on src/llama-model-loader.cpp). Fixing that needs either rebasing the
+# fork to track Ollama's pin closely, or making Ollama's compat-patch step
+# tolerant of a source override — out of scope for this pass. Until then, this
+# fork's fixes ship as additional Python patch scripts below (same mechanism
+# as patch-llama-tier-fitting.py), applied to Ollama's normally-fetched
+# llama.cpp copy, not by swapping the source tree wholesale.
 
 # Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
-# If LLAMA_CPP_FORK is set, override the bundled version with our fork.
 # Separated from build so patches can be applied in between.
-#
-# WARNING: FetchContent re-runs its git update step during `cmake --build` and
-# checks out the tag from LLAMA_CPP_VERSION (e.g. b10434). A fork without that
-# tag fails with "pathspec ... did not match any file(s) known to git".
-# Only set LLAMA_CPP_FORK if the fork carries the tags Ollama pins to.
 RUN if [ "${BONSAI}" = ON ]; then \
-      set -- -DFETCHCONTENT_SOURCE_DIR_LLAMA_CPP=/src/build/llama-server-cuda_v11/_deps/llama_cpp-src; \
+      set -- -DFETCHCONTENT_SOURCE_DIR_LLAMA_CPP=/src/build/llama-server-cuda_v13/_deps/llama_cpp-src; \
     else set --; fi \
     && cmake -S llama/server \
-          --preset llama_cuda_v11_linux \
+          --preset llama_cuda_v13_linux \
           "$@" \
           -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
-          -DGGML_CUDA_FA=OFF \
+          -DGGML_CUDA_FA=${GGML_CUDA_FA} \
           -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
-    && if [ -n "${LLAMA_CPP_FORK}" ]; then \
-        echo "Using custom llama.cpp fork: ${LLAMA_CPP_FORK}"; \
-        LLAMA_SRC="build/llama-server-cuda_v11/_deps/llama_cpp-src"; \
-        rm -rf "$LLAMA_SRC"; \
-        git clone --depth=1 "${LLAMA_CPP_FORK}" "$LLAMA_SRC"; \
-        echo "Fork: $(git -C $LLAMA_SRC rev-parse --short HEAD)"; \
-    fi
+          -DGGML_CPU_ALL_VARIANTS=ON \
+    && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (no fork clone needed)"
 
-# Step 2: GPU-tier-fitting patch — applies Python patches to common/fit.cpp.
-# When LLAMA_CPP_FORK is used, the fork already has these patches natively
-# so this step is a no-op (the patch guard prevents double-patching).
+# Step 2: apply this fork's Python patches to the fetched llama.cpp source.
+# - patch-llama-tier-fitting.py: GPU-tier-aware layer distribution (fit.cpp)
+# - patch-llama-jinja-tojson.py: adds a missing tojson filter for undefined
+#   values so tool-calling chat templates don't crash llama-server at startup
+#
+# NOTE on vision-model VRAM starvation (BUG-hybrid-arch-degeneration.md,
+# Finding 1): this is NOT a fit.cpp bug — upstream llama-server already adds
+# mtmd's own worst-case mmproj memory estimate to fit_params_target before
+# fitting (tools/server/server-context.cpp, "[mtmd] estimated worst-case
+# memory usage..."). On an 8 GiB Tesla M10 that worst-case reservation alone
+# (~5.4 GiB for Qwen3.5/3.6's vision tower) can leave too little headroom for
+# even one decoder layer. The actual fix is a deployment-time flag, not a
+# patch: set LLAMA_ARG_MMPROJ_OFFLOAD=false (keeps CLIP on CPU, confirmed via
+# testing on N11-M10: 34/34 layers offloaded, correct output, ~5.7 tok/s,
+# vs. 0/34 with mmproj on GPU) for single-GPU Maxwell deployments of
+# vision-capable models. A CLIP-margin patch was tried here first and
+# reverted — it was redundant with (and briefly stacked on top of) the
+# upstream mechanism above, which was already correct.
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
 RUN python3 /tmp/patch-llama-jinja-tojson.py /src
 
@@ -121,9 +132,9 @@ RUN python3 /tmp/patch-llama-jinja-tojson.py /src
 # NOTE: No --component filter → installs llama-server binary + CUDA libs.
 # --component llama-server only installs .so files, not the binary itself.
 RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
-    cmake --build build/llama-server-cuda_v11 \
+    cmake --build build/llama-server-cuda_v13 \
           --parallel "${JOBS}" \
-    && cmake --install build/llama-server-cuda_v11 \
+    && cmake --install build/llama-server-cuda_v13 \
              --strip
 
 # Collect all runtime files into /runtime:
@@ -136,10 +147,10 @@ RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
 RUN mkdir -p /runtime \
     && cp -aT /src/dist/lib/ollama /runtime \
     && find /src/dist/lib -maxdepth 1 -name 'lib*.so*' -exec cp -P {} /runtime/ \; \
-    && find /src/build/llama-server-cuda_v11/bin -maxdepth 1 \( -type f -o -type l \) \
+    && find /src/build/llama-server-cuda_v13/bin -maxdepth 1 \( -type f -o -type l \) \
        -exec cp -P {} /runtime/ \; \
-    && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libnccl.so*' -exec cp -P {} /runtime/cuda_v11/ \; 2>/dev/null || true \
-    && ls -lh /runtime/ /runtime/cuda_v11/
+    && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libnccl.so*' -exec cp -P {} /runtime/cuda_v13/ \; 2>/dev/null || true \
+    && ls -lh /runtime/ /runtime/cuda_v13/
 
 # Go patches — applied before go build:
 # 1. Tier-aware FA: enable FA when model uses only fast GPUs (CC >= 7.0)
@@ -160,6 +171,13 @@ RUN if [ "${BONSAI}" = ON ]; then \
     fi
 
 # Go binary
+# (retrigger 2026-09-16: previous CI attempt's singlegpu-fa step was cancelled)
+# -X sets version.Version at link time — without it the binary reports the
+# package's zero-value default "0.0.0" via /api/version regardless of which
+# Ollama release was actually built (confirmed live: every fork-image
+# container showed "0.0.0", vs. e.g. "0.32.14" on a stock-Ollama container —
+# harmless for inference itself, but makes fleet-monitoring dashboards unable
+# to tell which Ollama version is actually running).
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -buildmode=pie \
       -ldflags="-w -s -X github.com/ollama/ollama/version.Version=${OLLAMA_VERSION#v}" \
@@ -180,12 +198,13 @@ COPY scripts/gpu-detect.sh         /usr/local/bin/gpu-detect.sh
 COPY scripts/ollama-entrypoint.sh  /usr/local/bin/ollama-entrypoint.sh
 COPY scripts/auto-optimize.py      /usr/local/bin/auto-optimize.py
 COPY scripts/ollama-proxy.py       /usr/local/bin/ollama-proxy.py
+COPY scripts/check-cuda-flash-attn.py /usr/local/bin/check-cuda-flash-attn.py
 RUN chmod +x /usr/local/bin/gpu-detect.sh /usr/local/bin/ollama-entrypoint.sh \
     && chmod +x /usr/local/bin/auto-optimize.py /usr/local/bin/ollama-proxy.py
 
 # /usr/lib/ollama must be first so libggml-base.so.0 is found when libggml-cuda.so
-# (RPATH=$ORIGIN pointing to cuda_v11/) falls back to LD_LIBRARY_PATH.
-ENV LD_LIBRARY_PATH=/usr/lib/ollama/cuda_v11:/usr/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+# (RPATH=$ORIGIN pointing to cuda_v13/) falls back to LD_LIBRARY_PATH.
+ENV LD_LIBRARY_PATH=/usr/lib/ollama/cuda_v13:/usr/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV OLLAMA_HOST=0.0.0.0:11434

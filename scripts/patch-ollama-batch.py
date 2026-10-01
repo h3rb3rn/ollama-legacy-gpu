@@ -28,7 +28,7 @@ import sys
 import re
 from pathlib import Path
 
-PATCH_GUARD = "OLLAMA_MAX_BATCH_SIZE"
+PATCH_GUARD = "// [OLLAMA_MAX_BATCH_SIZE patch]"
 TARGET_FILE = "llm/llama_server.go"
 
 # The batch size limiting code to insert.
@@ -88,6 +88,20 @@ def patch(path: Path) -> bool:
         print(f"  Already patched: {path}")
         return True
 
+    modern_anchor = ('\tif opts.NumBatch > 0 {\n'
+                     '\t\tparams = append(params, "-b", strconv.Itoa(opts.NumBatch), "-ub", strconv.Itoa(opts.NumBatch))')
+    if modern_anchor in content:
+        cap = '''\t// [OLLAMA_MAX_BATCH_SIZE patch] Bound decode prefill buffers on legacy GPUs.
+\tif limit, err := strconv.Atoi(os.Getenv("OLLAMA_MAX_BATCH_SIZE")); err == nil && limit > 0 {
+\t\tif opts.NumBatch <= 0 || opts.NumBatch > limit {
+\t\t\topts.NumBatch = limit
+\t\t}
+\t}
+'''
+        path.write_text(content.replace(modern_anchor, cap + modern_anchor, 1))
+        print(f"  Batch cap patch applied to appendBatchArgs in {path.name}")
+        return True
+
     # Check that strconv is imported (needed for Atoi)
     if '"strconv"' not in content:
         # Add strconv import if missing
@@ -134,10 +148,10 @@ def main():
     print(f"Looking for {TARGET_FILE} under {root}...")
     target = find_target(root)
     if not target:
-        print(f"  {TARGET_FILE} not found — skipping")
-        sys.exit(0)
+        sys.exit(f"Required patch target missing: {TARGET_FILE}")
     print(f"  Target: {target}")
-    patch(target)
+    if not patch(target):
+        sys.exit("Batch cap patch failed; review upstream changes before releasing")
 
 
 if __name__ == "__main__":

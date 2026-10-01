@@ -1,0 +1,7 @@
+{
+  "ollama_version": "v0.34.1",
+  "repository": "https://github.com/PrismML-Eng/llama.cpp",
+  "release": "prism-b10743-adfffbe",
+  "commit": "adfffbe41b2cabcd51fff326ab045662265062bb",
+  "archive_sha256": "5fc0982933ea35cb7286710f5ee86383b6521725ce4e6d1ca52a4cc6676804e0"
+}

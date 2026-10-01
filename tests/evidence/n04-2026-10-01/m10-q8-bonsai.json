@@ -1,0 +1,206 @@
+{
+  "passed": true,
+  "started": "2026-09-30T20:00:00.647501+00:00",
+  "container": {
+    "id": "ad78e90fc2ab7d2e2f2eb1a780d0bf817e613df7b8aa074707c759f7851fc891",
+    "image_id": "sha256:c5ae3f17cfd9bc116dacc141bb5562bc92732aaf190e0ab3d3968a60f5aa24ab",
+    "started_at": "2026-09-30T19:59:57.042836195Z",
+    "restarts": 0,
+    "gpu_requests": [
+      {
+        "Driver": "",
+        "Count": 0,
+        "DeviceIDs": [
+          "GPU-f668b685-3c6d-0fc7-1f85-960a0607c561",
+          "GPU-086bd19b-5a4c-a6dc-8c82-9c1a5276b0b2",
+          "GPU-7b3bd39b-b948-09a6-8ef9-756406efdb99",
+          "GPU-113fd30d-cb6f-ad02-0803-2c2b9053709d"
+        ],
+        "Capabilities": [
+          [
+            "gpu"
+          ]
+        ],
+        "Options": {}
+      }
+    ]
+  },
+  "model": "bonsai2:27b-pq2_0",
+  "context": 190000,
+  "kv_type": "q8_0",
+  "results": [
+    {
+      "test": "arithmetic",
+      "wall_seconds": 106.56731068703812,
+      "expected": "437",
+      "correct": true,
+      "model": "bonsai2:27b-pq2_0",
+      "created_at": "2026-09-30T20:01:47.462574354Z",
+      "done": true,
+      "done_reason": "stop",
+      "total_duration": 106563407308,
+      "load_duration": 42088118737,
+      "prompt_eval_count": 67,
+      "prompt_eval_cached_count": 0,
+      "prompt_eval_duration": 30513665000,
+      "eval_count": 50,
+      "eval_duration": 33953129999,
+      "prompt_eval_tps": 2.1957375490620348,
+      "eval_tps": 1.4726182829527827
+    },
+    {
+      "test": "arithmetic",
+      "wall_seconds": 74.85199185297824,
+      "expected": "763",
+      "correct": true,
+      "model": "bonsai2:27b-pq2_0",
+      "created_at": "2026-09-30T20:03:02.315649326Z",
+      "done": true,
+      "done_reason": "stop",
+      "total_duration": 74848811191,
+      "load_duration": 9470126,
+      "prompt_eval_count": 71,
+      "prompt_eval_cached_count": 0,
+      "prompt_eval_duration": 42924010000,
+      "eval_count": 58,
+      "eval_duration": 31021750000,
+      "prompt_eval_tps": 1.6540859066988383,
+      "eval_tps": 1.8696559671843143
+    },
+    {
+      "test": "benchmark-1",
+      "wall_seconds": 98.54622458398808,
+      "model": "bonsai2:27b-pq2_0",
+      "created_at": "2026-09-30T20:04:40.862221454Z",
+      "done": true,
+      "done_reason": "length",
+      "total_duration": 98543636452,
+      "load_duration": 7923744,
+      "prompt_eval_count": 72,
+      "prompt_eval_cached_count": 0,
+      "prompt_eval_duration": 28423512000,
+      "eval_count": 128,
+      "eval_duration": 69214973000,
+      "prompt_eval_tps": 2.5331141345235593,
+      "eval_tps": 1.8493108420341362
+    },
+    {
+      "test": "benchmark-2",
+      "wall_seconds": 72.95864969608374,
+      "model": "bonsai2:27b-pq2_0",
+      "created_at": "2026-09-30T20:05:53.820081755Z",
+      "done": true,
+      "done_reason": "length",
+      "total_duration": 72955602153,
+      "load_duration": 5601787,
+      "prompt_eval_count": 72,
+      "prompt_eval_cached_count": 68,
+      "prompt_eval_duration": 2775225000,
+      "eval_count": 128,
+      "eval_duration": 69267818000,
+      "prompt_eval_tps": 25.943842391157474,
+      "eval_tps": 1.8478999872639268
+    },
+    {
+      "test": "stability",
+      "wall_seconds": 1161.8239888389362,
+      "model": "bonsai2:27b-pq2_0",
+      "created_at": "2026-09-30T20:25:15.631177355Z",
+      "done": true,
+      "done_reason": "length",
+      "total_duration": 1161807815760,
+      "load_duration": 3969996,
+      "prompt_eval_count": 92,
+      "prompt_eval_cached_count": 0,
+      "prompt_eval_duration": 30506363000,
+      "eval_count": 2048,
+      "eval_duration": 1131292646000,
+      "prompt_eval_tps": 3.0157642849788417,
+      "eval_tps": 1.810318494724839
+    }
+  ],
+  "cuda_capabilities": {
+    "library": "/usr/lib/ollama/cuda_v12/libggml-cuda.so",
+    "passed": true,
+    "checks": [
+      {
+        "device": 0,
+        "name": "Tesla M10",
+        "kv_type": "f16",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 0,
+        "name": "Tesla M10",
+        "kv_type": "q8_0",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 0,
+        "name": "Tesla M10",
+        "kv_type": "q4_0",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 1,
+        "name": "Tesla M10",
+        "kv_type": "f16",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 1,
+        "name": "Tesla M10",
+        "kv_type": "q8_0",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 1,
+        "name": "Tesla M10",
+        "kv_type": "q4_0",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 2,
+        "name": "Tesla M10",
+        "kv_type": "f16",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 2,
+        "name": "Tesla M10",
+        "kv_type": "q8_0",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 2,
+        "name": "Tesla M10",
+        "kv_type": "q4_0",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 3,
+        "name": "Tesla M10",
+        "kv_type": "f16",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 3,
+        "name": "Tesla M10",
+        "kv_type": "q8_0",
+        "cuda_flash_attention": true
+      },
+      {
+        "device": 3,
+        "name": "Tesla M10",
+        "kv_type": "q4_0",
+        "cuda_flash_attention": true
+      }
+    ]
+  },
+  "layers": [
+    [
+      "65",
+      "65"
+    ]
+  ]
+}

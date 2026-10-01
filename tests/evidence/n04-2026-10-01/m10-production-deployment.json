@@ -1,0 +1,69 @@
+{
+  "passed": true,
+  "target": "ollama-tesla-bonsai",
+  "port": 11436,
+  "context": 190000,
+  "kv_type": "q8_0",
+  "image": "sha256:c5ae3f17cfd9bc116dacc141bb5562bc92732aaf190e0ab3d3968a60f5aa24ab",
+  "previous_container": "a998f51cf8339c674e002d1c8ac45c2fa6958f9ca37af48618525601d56a84f0",
+  "rollback_container": "ollama-tesla-bonsai-pre-q8-20261001-182151",
+  "container_id": "20ed4edc743a48e50b890b3e99d5312ba114a8ef59860d24f724c994585f6191",
+  "version": {
+    "version": "0.34.1"
+  },
+  "phase": "complete",
+  "loaded": [
+    {
+      "name": "bonsai2:27b-pq2_0",
+      "model": "bonsai2:27b-pq2_0",
+      "size": 17683321972,
+      "digest": "b29cf02fa4a9e919b7530ef0124c7dac4b94ff9821187d5048ed63920cf638b0",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen35",
+        "families": [
+          "qwen35"
+        ],
+        "parameter_size": "26.9B",
+        "quantization_level": "PQ2_0"
+      },
+      "expires_at": "2026-10-02T18:48:26.781226127Z",
+      "size_vram": 17683321972,
+      "context_length": 190000
+    }
+  ],
+  "measurements": [
+    {
+      "test": "arithmetic",
+      "eval_count": 50,
+      "eval_tps": 1.460153676544601,
+      "correct": true
+    },
+    {
+      "test": "arithmetic",
+      "eval_count": 58,
+      "eval_tps": 1.8619259890839774,
+      "correct": true
+    },
+    {
+      "test": "benchmark-1",
+      "eval_count": 128,
+      "eval_tps": 1.8368035359386468,
+      "correct": null
+    },
+    {
+      "test": "benchmark-2",
+      "eval_count": 128,
+      "eval_tps": 1.837661816531577,
+      "correct": null
+    },
+    {
+      "test": "stability",
+      "eval_count": 2048,
+      "eval_tps": 1.8021950172123704,
+      "correct": null
+    }
+  ],
+  "other_production_unchanged": true
+}

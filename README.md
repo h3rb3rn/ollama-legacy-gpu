@@ -1,319 +1,180 @@
-# ollama-legacy-gpu
-
-> **Latest release: [v0.30.0](https://github.com/h3rb3rn/ollama-legacy-gpu/releases/tag/v0.30.0)** — based on Ollama v0.30.10 · Docker: `ghcr.io/h3rb3rn/ollama-legacy:cuda12-maxwell-latest`
-
-A fork of [Ollama](https://github.com/ollama/ollama) — the Go runtime and Docker packaging — optimized for **legacy Tesla M10/M60 (Maxwell, CC 5.0/5.2) GPUs** on CUDA 12.
-
-> **Status (2026-09-16):** This fork is validated and deployed on Tesla M10/M60 hosts
-> (N11-M10, N02-M60, and the Tesla-only containers on N04-RTX). It is **not** used for
-> the RTX/GTX GPUs on N04-RTX — those run stock upstream Ollama in a separate
-> deployment. A direct test confirmed this fork's current build **crashes on RTX 2060
-> on every model load** (`CUDA error: unspecified launch failure`, GPU-discovery bug —
-> a different, unrelated code path than the Flash-Attention kernel dispatch described
-> in section 3 below). See
-> [`PERFORMANCE-OPTIMIZATION-LOG.md`](PERFORMANCE-OPTIMIZATION-LOG.md#zusatzuntersuchung-2026-09-16-fork-image-auf-rtxgtx-gpus-getestet--nicht-einsatzbereit)
-> for the full test and root cause, and
-> [`BUG-hybrid-arch-degeneration.md`](BUG-hybrid-arch-degeneration.md) for a second,
-> separate finding (MTP speculative-decoding crash, Finding 2) and its fix. The
-> hardware table and RTX-inclusive framing below describe the original design intent
-> for a unified 12-GPU pool on N04-RTX; the *current* production topology is
-> per-architecture-class instead (see the two linked documents for what's actually
-> deployed and validated today).
-
-> **Reference system: N04-RTX**  
-> AMD EPYC 3151 4-Core · 128 GiB RAM · Ubuntu 22.04 LTS · CUDA 12.0.1 driver  
-> 12 GPU endpoints · ~114 GiB VRAM total · No NVLink (PCIe only)
-
----
-
-## Why this fork exists
-
-Standard `ollama/ollama:latest` targets modern CUDA architectures and drops support for **Tesla M10 (CC 5.0) and M60 (CC 5.2)** — Maxwell-generation data-center GPUs still holding 54 GiB of useful VRAM on N04-RTX. Beyond driver support, upstream Ollama also distributes model layers equally across all GPUs, ignoring their vastly different memory bandwidths (83 GB/s for M10 vs 360 GB/s for RTX 3060).
-
-This fork solves three interconnected problems:
-
-1. **Maxwell GPU support** under CUDA 12 (CC 5.0/5.2 excluded from official CUDA 12)
-2. **Bandwidth-aware layer distribution** — potent GPUs fill first; slow GPUs only used as overflow
-3. **Per-model GPU pool selection** — fewer GPUs when the model fits; full pool only when needed
-
----
-
-## Core optimization principle: fill fast GPUs first, use only what you need
-
-The central insight driving all optimizations in this fork:
-
-> **Pipeline throughput is bounded by the slowest GPU. Fewer GPUs in the pipeline means fewer synchronization points and a faster bottleneck.**
-
-On N04-RTX, memory bandwidth spans a 4.3× range:
-
-| GPU class | Bandwidth | Available VRAM |
-|-----------|-----------|----------------|
-| RTX 3060 (×2) | 360 GB/s | 24 GiB |
-| RTX 2060 12GB (×3) | 336 GB/s | 36 GiB |
-| GTX 1060 6GB | 192 GB/s | 6 GiB |
-| Tesla M60 (×2) | 160 GB/s | ~15 GiB |
-| Tesla M10 (×4) | 83 GB/s | 32 GiB |
-
-If you spread `qwen3.6:35b` (22 GiB) across all 12 GPUs, each gets ~1.8 GiB — including four Tesla M10s at 83 GB/s. Every decode step then synchronizes across all 12 GPUs and waits for the slowest one. Measured result: ~4 tok/s.
-
-With greedy fill (RTX only, 4 GPUs): **24.3 tok/s with speculative decoding** — a 6× improvement on the same hardware.
-
-The principle: **assign layers greedily to the fastest GPUs, stop when all layers are placed.**
-
----
-
-## Reference Hardware: N04-RTX
-
-**Host system:**
-- CPU: AMD EPYC 3151 4-Core Processor
-- RAM: 128 GiB DDR4 ECC
-- OS: Ubuntu 22.04.5 LTS
-- CUDA driver: 12.0.1 (no NVLink — all inter-GPU communication over PCIe)
-
-**GPU topology (CUDA order, worst → best bandwidth):**
-
-| CUDA | GPU | Arch | CC | VRAM | Bandwidth |
-|------|-----|------|----|------|-----------|
-| 0–3 | Tesla M10 (×4) | Maxwell | 5.0 | 8 GiB each | 83 GB/s |
-| 4–5 | Tesla M60 (×2) | Maxwell | 5.2 | ~7.7 GiB each | 160 GB/s |
-| 6 | GTX 1060 6GB | Pascal | 6.1 | 6 GiB | 192 GB/s |
-| 7–9 | RTX 2060 12GB (×3) | Turing | 7.5 | 12 GiB each | 336 GB/s |
-| 10–11 | RTX 3060 (×2) | Ampere | 8.6 | 12 GiB each | 360 GB/s |
-
-**Total: ~114 GiB across 12 GPU dies on a single PCIe host.**
-
-CUDA ordering (worst → best) is intentional: the greedy fill algorithm fills from
-CUDA 11 (RTX 3060) downward, exhausting fast GPUs before touching slow ones.
-
----
-
-## Key Changes vs upstream Ollama
-
-### 1. Dynamic GPU Pool Selection
-
-**File:** `scripts/patch-ollama-dynamic-pool.py` → patches `llm/llama_server.go`
-
-On every model load, `selectGPUPool()` checks the model file size against the RTX-only
-pool capacity and routes accordingly:
-
-```
-Model ≤ 75% of RTX fast pool (~48 GiB threshold):
-  → CUDA_VISIBLE_DEVICES = 5 RTX GPUs only (64 GiB)
-  → Greedy fill: fills RTX 3060 → RTX 2060, stops when done
-  → Flash Attention ON (CC ≥ 7.5, MMA kernel)
-  → Result: 3–4 GPUs used, Tesla untouched, maximum tok/s
-
-Model > threshold:
-  → CUDA_VISIBLE_DEVICES = all 12 GPUs (114 GiB)
-  → Greedy fill with bandwidth weighting (see below)
-  → Flash Attention ON — TILE kernel handles Maxwell/Pascal (see section 4)
-  → Result: RTX fills first, Tesla/GTX only for overflow capacity
-```
-
-**Why pool selection matters — and why this is per-model, not global:**
-
-In standard Ollama, a single Tesla M10 (CC 5.0) in `CUDA_VISIBLE_DEVICES` forces
-Flash Attention OFF for the entire server process — affecting all models, including
-those that would never touch a Tesla GPU. This is a global, permanent flag in upstream.
-
-This fork makes it **per-model and dynamic**:
-
-- Model fits in RTX pool → `CUDA_VISIBLE_DEVICES` restricted to RTX UUIDs → FA=ON (MMA kernel)
-- Model requires full pool → all 12 GPUs → FA=ON via TILE kernel for Maxwell/Pascal
-
-Whether FA is active depends entirely on **which GPUs the specific model actually uses**,
-not on which GPUs are installed. A server running both `qwen3.6:35b` (RTX pool, FA=MMA)
-and `llama4:scout` (full pool, FA=TILE) runs both with Flash Attention enabled
-simultaneously — each with the kernel appropriate for its assigned GPUs.
-
-The disabling of modern features like FA is **never permanent** in this fork; it is
-only an upstream limitation that this project removes through pool-aware routing.
-
-### 2. Greedy Fill with Bandwidth Weighting
-
-**File:** `scripts/patch-llama-tier-fitting.py` → patches `common/fit.cpp`  
-**Native C++ version:** `h3rb3rn/llama.cpp-legacy-gpu` (branch `legacy-gpu-support`)
-
-Standard llama.cpp distributes layers across all visible GPUs proportionally to their
-VRAM. For a 22 GiB model across 12 GPUs, every GPU including Tesla M10 gets the same
-share. Decode throughput collapses to the M10's 83 GB/s bottleneck.
-
-**Greedy fill algorithm:**
-
-```
-For each GPU sorted by bandwidth (best → worst, CUDA 11 → 0):
-    effective_budget = (free_vram − margins) × (this_bw / max_bw)
-    n_layers = effective_budget / bytes_per_layer
-    assign layers; reduce remaining
-    stop if all layers placed
-
-If greedy cannot place all layers (tight overhead):
-    fall back to VRAM-weighted distribution across all GPUs
-    (proportional to free_vram − margins, not equal shares)
-```
-
-The bandwidth factor is critical: Tesla M10 (83 GB/s) gets an effective budget of
-`8 GiB / 4.3 = 1.9 GiB`, while RTX 3060 (360 GB/s) gets its full 12 GiB.
-This prevents assigning many layers to a GPU that would become a pipeline bottleneck.
-
-**Results on N04-RTX:**
-
-| Model | Layers | GPUs actually used | Unused GPUs | tok/s |
-|-------|--------|-------------------|-------------|-------|
-| qwen3.6:35b (22 GiB) | 42 | 3–4 RTX | 8 Tesla/GTX/RTX | ~24.3 |
-| llama4:scout (62 GiB) | 49 | all 12 | none | ~1 |
-
-For qwen: **8 GPUs stay idle** because RTX cards can hold the entire model. For
-llama4:scout: all 12 are needed because the model exceeds the RTX pool (60 GiB).
-
-### 3. Flash Attention on All Architectures (including Maxwell)
-
-> **Caveat (2026-09-16):** The kernel-dispatch logic described below is real and
-> correct (verified directly against `ggml-cuda/fattn.cu` source) — but a *separate*
-> bug in this fork's build (GPU-discovery / compute-capability detection) currently
-> crashes every model load on RTX 2060 before this dispatch is ever reached. Validated
-> and safe on Maxwell (Tesla M10/M60) only; **do not deploy this image to RTX/GTX GPUs**
-> until that's fixed. See the status note at the top of this file.
-
-**Discovery:** `ggml-cuda/fattn.cu` in llama.cpp dispatches FA kernels by compute
-capability at runtime:
-
-| CC | GPU class | FA kernel used | Compute buffer |
-|----|-----------|---------------|----------------|
-| ≥ 8.6 | RTX 3060 | `MMA_F16` (Ampere tensor cores) | ~76 MiB |
-| ≥ 7.5 | RTX 2060 | `MMA_F16` (Turing tensor cores) | ~76 MiB |
-| ≥ 7.0 | Volta | `WMMA_F16` | ~76 MiB |
-| ≥ 5.0 | Tesla M10/M60, GTX 1060 | **`TILE`** (generic CUDA cores) | ~76 MiB |
-
-The `TILE` kernel requires no tensor cores — it is the generic FA fallback that runs
-on any CUDA architecture ≥ CC 5.0. `BEST_FATTN_KERNEL_NONE` (abort) is never returned
-for CC ≥ 5.0 in our build.
-
-**Impact:** Flash Attention ON across all 12 GPUs including Tesla M10. The primary GPU's
-compute buffer drops from **11,444 MiB → 76 MiB**, enabling large models at 131K+
-context without OOM on any GPU in the pool.
-
-### 4. Native CUBIN Targets (No PTX JIT)
-
-Standard builds use `-virtual` CUDA targets for older architectures, causing JIT
-compilation of PTX bytecode on first model load. With 12 GPUs and PTX for CC 5.0:
-cold-start delay of 20–30 minutes.
-
-This build compiles native CUBIN for every target:
-```
-50-real;52-real;60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real
-```
-
-Kernels load instantly on all 12 GPUs from the first request.
-
-### 5. Auto-Optimization Proxy
-
-**Files:** `scripts/ollama-proxy.py`, `scripts/auto-optimize.py`
-
-A transparent HTTP proxy (port 11434 → Ollama on 11435) that:
-
-1. Intercepts the first request to any model
-2. Launches a background optimizer testing:
-   - `OVERHEAD_SCALE` ∈ [1.0, 1.1, 1.2, 1.4, 1.6, 2.0]
-   - MTP speculative decoding draft tokens [0, 2, 4] at each scale
-3. Caches the globally optimal `(scale, draft)` pair in `/root/.ollama/auto-optimize/`
-4. Applies cached settings on every subsequent load
-
-The optimizer tests MTP at all scale values because GPU count affects speculative
-decoding efficiency: with 4 GPUs (scale=1.6) each GPU has fewer layers per pass,
-making draft tokens worth the overhead. With 3 GPUs (scale=1.1), they degrade throughput.
-
-**Proxy connection timeout:** 1800s to accommodate large model load times (llama4:scout
-requires ~8 minutes to transfer 62 GiB across 12 GPUs). Shorter timeouts cause the
-scheduler to cancel loading and retry indefinitely.
-
-### 6. Persistent Layout Cache
-
-**Files:** `scripts/patch-ollama-dynamic-pool.py`, `scripts/auto-optimize.py`, `scripts/ollama-proxy.py`
-
-After a successful model load, `auto-optimize.py` measures per-GPU VRAM delta via NVML
-and derives the `--tensor-split` proportions used by llama.cpp. These are written to
-`/root/.ollama/layout-cache/<model_sha>-<gpu_count>.split` (persistent volume).
-
-On the next restart, `selectGPUPool()` reads the cache and injects `--tensor-split`
-directly, bypassing the `common_params_fit_impl` estimation loop (20–30 iterations
-visible in logs). Cache key encodes model SHA and GPU count so fast-pool and full-pool
-layouts are stored separately.
-
----
-
-## Model Performance on N04-RTX
-
-> **Note:** The `qwen3.6:35b` row below was measured on the RTX-only pool, which today
-> runs **stock upstream Ollama** (`ollama`/`ollama-rgtx` containers), not this fork's
-> image — see the status note at the top. It's kept here as the historical reference
-> number this fork's greedy-fill design was validated against; it doesn't reflect this
-> fork's own image running on that hardware (which currently doesn't work at all, see
-> section 3). It also currently runs with MTP speculative decoding **unmitigated**
-> (`draft_num_predict=2`, the same crash-capable configuration documented as Finding 2
-> in `BUG-hybrid-arch-degeneration.md`) since stock Ollama has no equivalent of this
-> fork's `ollama-proxy.py` safety override.
-
-| Model | Size | Pool | GPUs used | Flash Attn | tok/s |
-|-------|------|------|-----------|------------|-------|
-| qwen3.6:35b Q4_K_M | 22 GiB | RTX fast (5 avail.) | **3–4 RTX** | MMA (CC 7.5+) | **~24.3** (with MTP draft=2, scale=1.6) |
-| llama4:scout Q4_K_M | 62 GiB | Full 12-GPU | **all 12** | MMA + TILE | **~1** |
-
-**Why llama4:scout is slow (~1 tok/s) even with all 12 GPUs on GPU:**
-llama4:scout uses a Mixture-of-Experts (MoE) architecture: 16 expert FFN blocks per
-layer with only 1 active per token. The active expert's weights can reside on any GPU,
-requiring PCIe transfers between GPUs on every decode step. Without NVLink (which
-provides 600 GB/s vs PCIe's ~32 GB/s per lane), each MoE decode step crosses the PCIe
-bus 49 times (once per layer). This is a fundamental hardware constraint — not a
-software problem. llama4:scout is designed for systems with NVLink or single GPUs
-with ≥ 80 GiB VRAM (A100/H100).
-
-**qwen3.6:35b** is a dense transformer (no MoE) and benefits fully from the greedy
-fill approach: all active layers reside on high-bandwidth RTX GPUs with no slow-GPU
-bottleneck.
-
----
-
-## Quick Start
+# Ollama legacy GPU fork with Bonsai support
+
+Ollama runtime and Docker builds for NVIDIA legacy and current GPUs, including
+native integration of the [Prism Bonsai demo](https://github.com/PrismML-Eng/Bonsai-demo)
+and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf).
+
+**Verified status, 2026-10-01:** Bonsai PQ2_0 inference and quantized KV caches
+passed on Tesla M10/M60. M10 production on N04 uses Q8 KV at190k context.
+M60 Q4 testing passed; its original F16 production service was restored.
+CUDA11 has compiled successfully but remains **untested on GPU hardware**.
+The CUDA12 Bonsai build for **Ollama0.35.0** compiled successfully; the runtime
+results below use the qualified **0.34.1** image, not0.35.0.
+
+## GPU compatibility
+
+This table describes **this repository's compiled targets**, not every GPU
+supported by a CUDA Toolkit. A matching compute capability is build coverage;
+only the listed hardware tests establish runtime validation.
+The authoritative matrix is [presets/gpu-targets.json](presets/gpu-targets.json).
+
+| Variant | Compiled CC | Tesla / data-center examples | GeForce / gamer examples | Runtime status |
+| --- | --- | --- | --- | --- |
+| CUDA11.8 `cuda11-legacy` | 3.7 | Tesla K80 | No GeForce model claimed for CC3.7 | **Untested**; compilation passed, F16 KV /FAOFF |
+| CUDA11.8 `cuda11-legacy` | 5.0,5.2 | Tesla M10, M60, M40 | GTX750/750Ti; GTX950/960/970/980/980Ti; Maxwell TITAN X | **Untested with CUDA11**; compiled targets only |
+| CUDA12.0 `cuda12-maxwell` | 5.0 | Tesla M10 | GTX750/750Ti | **M10 tested:** Bonsai Q8/Q4, four GPUs,190k; gamer cards untested |
+| CUDA12.0 `cuda12-maxwell` | 5.2 | Tesla M60, M40 | GTX950/960/970/980/980Ti; Maxwell TITAN X | **M60 tested:** Bonsai Q4, two GPUs,190k; gamer cards/M40 untested |
+| CUDA12.0 `cuda12-maxwell` | 6.0,6.1 | Tesla P100, P4, P40 | GTX1050/1050Ti/1060/1070/1070Ti/1080/1080Ti; Pascal TITAN X/Xp | Compiled targets, **fork inference untested** |
+| CUDA12.0 `cuda12-maxwell` | 7.0 | Tesla V100 | TITAN V | Compiled target, **untested** |
+| CUDA13 `cuda13-rtx` | 7.5 | T4 | GTX16 series; RTX20 series; TITAN RTX | **RTX2060 tested** with Bonsai Q4 at256k; other cards untested |
+| CUDA13 `cuda13-rtx` | 8.0,8.6 | A100, A10 | RTX30 series | **RTX3060 tested** with Bonsai Q4 at256k; other cards untested |
+| CUDA13 `cuda13-rtx` | 8.9,9.0,10.0,12.0 | L4/L40, H100, B200 | RTX40/RTX50 series | Build targets; **untested** |
+
+CUDA13 cannot compile Maxwell, Pascal or Volta. GTX10 cards therefore route
+to CUDA12; GTX16 cards are Turing and route to CUDA13. CUDA11's current preset
+does **not** contain KeplerCC3.0/3.5: GTX650/660/670/680/760/770/780/780Ti and
+Kepler TITAN are not covered. Jetson/mobile variants and other unlisted compute
+capabilities are not automatically supported. Driver compatibility and sufficient
+VRAM are required independently of the target architecture.
+
+Sources: [NVIDIA legacy compute capabilities](https://developer.nvidia.com/cuda/gpus/legacy),
+[current compute capabilities](https://developer.nvidia.com/cuda/gpus),
+[CUDA13 architecture removals](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/index.html).
+
+## Bonsai demo integration and the Q2 model
+
+The demo's NVIDIA path uses Prism llama.cpp; its separate MLX path targets
+Apple Silicon. This fork integrates the NVIDIA backend into ordinary Ollama
+APIs rather than launching the demo's standalone server.
+
+- `BONSAI=ON` replaces the complete native backend with checksum-verified Prism
+  commit `adfffbe41b2cabcd51fff326ab045662265062bb` from
+  [source.json](patches/bonsai/source.json). Native libraries and private GGML
+  enums stay together; they must not be mixed with upstream libraries.
+- [prepare-bonsai.py](scripts/prepare-bonsai.py) applies the Ollama GGUF parser
+  extensions and native compatibility hooks, including Prism rotation metadata.
+- [import-bonsai.py](scripts/import-bonsai.py) imports the original published
+  GGUF unchanged, retaining its embedded template and model parameters.
+- Published two-bit **PQ2_0** weights are tested. **PTQ1_0** parser/import support
+  is present but not hardware-qualified. PQ2_0 is not ordinary `Q2_K` or the
+  different `Q2_0` development format.
+- **Weight quantization and KV quantization are independent:** all Bonsai tests
+  below use PQ2_0 weights; Q8_0/Q4_0 describes the attention cache.
+- CUDA12/13 release builds enable Flash Attention. Quantized KV requires both
+  compiled kernels and runtime FA; setting an environment variable cannot add
+  kernels omitted from an older image. CUDA11 keeps FAOFF and F16 KV.
+- Initial integration covers text inference. It does not import a separate
+  vision projector automatically.
+
+See [BONSAI.md](BONSAI.md) for build/import instructions and the
+[demo runtime/code audit](BONSAI-DEMO-RUNTIME-AUDIT-2026-09-29.md) for the verified
+MLX/Prism paths and Flash Attention differences.
+
+## Actual Bonsai PQ2_0 hardware results
+
+Model: `bonsai2:27b-pq2_0`; one request at a time; batch128, seed42,
+temperature0. Maxwell requests190000 context, allocated as190208.
+The cache capacity was allocated; tests did **not** fill all190k/256k slots.
+
+| GPUs on N04 | KV type | Context | KV total | Repeated128-token decode | 2048-token stability |
+| --- | --- | --- | --- | --- | --- |
+| Four Tesla M10, Q8 production | Q8_0 | 190k | 6.17GiB | 1.837 /1.838tok/s | 1.802tok/s |
+| Four Tesla M10, Q4 candidate | Q4_0 | 190k | 3.27GiB | 1.831 /1.833tok/s | 1.790tok/s |
+| Two Tesla M60, temporary production test | Q4_0 | 190k | 3.27GiB | 7.517 /7.508tok/s | 7.236tok/s |
+| Two RTX2060 +two RTX3060, fork qualification | Q4_0 | 256k | 4.50GiB | 21.557 /21.491tok/s | 20.802tok/s |
+
+M10/M60 quantized-cache tests passed arithmetic437 and763 and65/65 GPU model
+layers, with no CUDA allocation errors or container restarts. Ordinary
+`qwen3.5:4b` regression passed on M10 with both cache types. M60 actual Q8
+inference and its ordinary-model regression remain outstanding. Two arithmetic
+answers do not constitute a comprehensive quantization quality evaluation;
+layer offload does not by itself prove every graph operation runs on GPU.
+
+M10 F16 KV previously used11.61GiB: Q8 saves46.875%, Q4 saves71.875% of **KV
+memory**, not of total model/runtime memory. No M60 F16 speed baseline was
+measured. The M60/M10 speed difference does not isolate a PCIe, bandwidth or
+kernel bottleneck.
+
+Reports and reproducible evidence:
+
+- [M10 Q8 production rollout](BONSAI-M10-PRODUCTION-Q8-2026-10-01.md).
+- [M10 Q8/Q4 candidate validation](BONSAI-M10-190K-2026-09-30.md).
+- [M60 Q4 production test and restoration](BONSAI-M60-PRODUCTION-Q4-2026-10-01.md).
+- [RTX Flash Attention validation](BONSAI-RTX-FA-VALIDATION-2026-09-30.md).
+- [PQ2 performance analysis](BONSAI-PQ2-PERFORMANCE-2026-09-30.md).
+- [Machine-readable test evidence](tests/evidence/README.md).
+
+Current deployment differs from test topology: N04 ports11434/11435 now run
+**Stock Ollama0.35.0** at the user's request. Port11436 remains the qualified
+Bonsai fork with Q8. M60 port11442 was restored to its original F16 service.
+All share `/opt/ollama/models:/root/.ollama`; no duplicate model pool is needed.
+See [Stock deployment verification](STOCK-N04-DEPLOYMENT-2026-10-01.md).
+
+## Build and import
+
+Build the previously hardware-qualified Maxwell version:
 
 ```bash
-# On N04-RTX: pull and start
-cd /opt/deployment/ollama/fork/compose
-docker compose -f docker-compose.worker-rtx.yml pull
-docker compose -f docker-compose.worker-rtx.yml up -d
-
-# Or build from source
-docker build \
-  -f dockerfiles/Dockerfile.cuda12-maxwell \
-  --build-arg OLLAMA_VERSION=v0.9.0 \
-  --build-arg LLAMA_CPP_FORK=https://github.com/h3rb3rn/llama.cpp-legacy-gpu.git \
-  -t ghcr.io/h3rb3rn/ollama-legacy:cuda12-maxwell-latest .
+docker build -f dockerfiles/Dockerfile.cuda12-maxwell \
+  --build-arg OLLAMA_VERSION=v0.34.1 --build-arg BONSAI=ON \
+  --build-arg 'CUDA_ARCHITECTURES=50-real;52-real' \
+  --build-arg GGML_CUDA_FA=ON --build-arg JOBS=4 \
+  -t ollama-bonsai:local-maxwell .
 ```
 
-**Environment variables (set automatically by `gpu-detect.sh` via NVML):**
+Use `v0.35.0` for the new version; its broad CUDA12 build compiled locally,
+while hardware qualification remains necessary before production replacement.
+For a tested N04 runtime configuration see
+[the M10 Compose manifest](compose/docker-compose.n04-bonsai-m10.yml).
+Its pinned local image ID exists on N04; build/import a verified image first
+before using that manifest elsewhere. It does not pull a published registry tag.
 
-| Variable | Purpose |
-|----------|---------|
-| `CUDA_VISIBLE_DEVICES` | GPU order: worst→best bandwidth (greedy fill direction) |
-| `OLLAMA_FAST_GPU_DEVICES` | RTX-only UUIDs for fast pool |
-| `OLLAMA_FAST_POOL_VRAM_GB` | Total RTX VRAM (threshold for pool selection) |
-| `OLLAMA_GPU_TIER_THRESHOLD` | CUDA index split: legacy vs fast GPUs |
-| `OLLAMA_GPU_BANDWIDTHS` | Per-GPU bandwidth in GB/s (for layer budget weighting) |
+Import the GGUF already downloaded by Bonsai-demo:
 
----
+```bash
+export OLLAMA_HOST=http://127.0.0.1:11436
+python3 scripts/import-bonsai.py \
+  /path/to/Bonsai-demo/models/bonsai2-gguf/27B/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+  --context 190000 --batch 64
+ollama run bonsai2:27b-pq2_0
+```
 
-## Related Projects
+Keep the existing shared pool when updating an image; never download another
+copy merely to rebuild or deploy the runtime.
 
-- **Upstream Ollama**: https://github.com/ollama/ollama (MIT)
-- **llama.cpp fork**: https://github.com/h3rb3rn/llama.cpp-legacy-gpu (MIT)
-- **Upstream llama.cpp**: https://github.com/ggml-org/llama.cpp (MIT)
+## GitHub Actions
 
----
+The upstream check detects published Ollama releases; the build workflow applies
+Bonsai patches and compiles CUDA11/12/13 candidates. This is a versioned source
+build, not a merge of Ollama's entire repository into this packaging repository.
+Patch-anchor failures, parser checks and regression failures stop the build.
 
-## License
+Without `OLLAMA_GPU_TEST_TARGETS`, Actions builds **candidate images only**.
+It does not promote `latest`, deploy production or record the version as fully
+validated. With a provisioned inventory, immutable candidates must pass real
+K80/M10/M60/RTX hardware tests before configured rollout, promotion and version
+recording. Stock11434/11435 are excluded from automatic fork deployment.
+CUDA11 remains hardware-untested until a real K80 gate passes.
+See [GPU-RELEASE-AUTOMATION.md](GPU-RELEASE-AUTOMATION.md) for runner/config setup.
 
-MIT License — same as upstream Ollama and llama.cpp.
+## Local checks
 
-Modifications Copyright (c) 2025–2026 Philipp Horn.  
-Original Ollama code Copyright (c) Ollama contributors.  
-See [LICENSE](LICENSE) for the full MIT license text.
+```bash
+python3 -m unittest discover -s tests -v
+bash -n compose/update.sh
+git diff --check
+```
+
+The build additionally runs Go GGUF parser and legacy batch-cap tests against
+the selected Ollama release. Recorded native builds: CUDA11/Ollama0.34.1,
+CUDA12/Ollama0.34.1, CUDA13/Ollama0.34.1 and CUDA12/Ollama0.35.0.
+GPU evidence is historical and image-specific; it does not qualify every future
+release or every gamer card in the compatibility table.
+
+## Related projects and license
+
+[Ollama](https://github.com/ollama/ollama),
+[Prism llama.cpp](https://github.com/PrismML-Eng/llama.cpp),
+[legacy llama.cpp fork](https://github.com/h3rb3rn/llama.cpp-legacy-gpu).
+MIT license; see [LICENSE](LICENSE). Model weights retain their own license and
+are not distributed in this repository.

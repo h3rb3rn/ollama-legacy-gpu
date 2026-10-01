@@ -10,6 +10,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
+      # write is required by createDispatchEvent below, not for committing —
+      # the version file is recorded by the build workflow.
       contents: write
       packages: read
     steps:
@@ -17,10 +19,13 @@ jobs:
 
       - name: Fetch latest Ollama version
         id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION=$(curl -sf https://api.github.com/repos/ollama/ollama/releases/latest \
-            | jq -r '.tag_name')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          VERSION=$(gh api repos/ollama/ollama/releases/latest --jq .tag_name)
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || exit 1
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Upstream: $VERSION"
 
       - name: Read last built version
@@ -33,6 +38,8 @@ jobs:
       - name: New version detected — trigger build
         if: steps.upstream.outputs.version != steps.local.outputs.last
         uses: actions/github-script@v7
+        env:
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
         with:
           script: |
             await github.rest.repos.createDispatchEvent({
@@ -40,20 +47,15 @@ jobs:
               repo:  context.repo.repo,
               event_type: 'new-ollama-release',
               client_payload: {
-                version: '${{ steps.upstream.outputs.version }}'
+                version: process.env.UPSTREAM_VERSION
               }
             });
-            console.log('Build workflow triggered for ${{ steps.upstream.outputs.version }}');
+            console.log('Build workflow triggered for ' + process.env.UPSTREAM_VERSION);
 
-      - name: Update version file
-        if: steps.upstream.outputs.version != steps.local.outputs.last
-        run: |
-          echo "${{ steps.upstream.outputs.version }}" > .last-built-version
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .last-built-version
-          git commit -m "chore: detected Ollama ${{ steps.upstream.outputs.version }}"
-          git push
+      # NOTE: .last-built-version is written by the build workflow's
+      # record-version job, after all builds, hardware tests and rollouts. Recording
+      # it here would mark a version as done before the build even finished, so
+      # a failed build would never be retried.
 
       - name: Already up to date
         if: steps.upstream.outputs.version == steps.local.outputs.last

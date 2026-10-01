@@ -1,0 +1,69 @@
+--- a/fs/gguf/tensor.go
++++ b/fs/gguf/tensor.go
+@@ -151,6 +151,10 @@
+ 	TensorTypeMXFP4
+ 	TensorTypeNVFP4
+ 	TensorTypeQ1_0
++
++	// Prism-private tensor IDs; these differ from general.file_type.
++	TensorTypePQ2_0 TensorType = 142
++	TensorTypePTQ1_0 TensorType = 143
+ )
+ 
+ func (tt TensorType) NumBytes() float64 {
+@@ -221,6 +225,10 @@
+ 		return 1 + tt.blockSize()/2
+ 	case TensorTypeNVFP4:
+ 		return 4 + tt.blockSize()/2
++	case TensorTypePQ2_0:
++		return 34
++	case TensorTypePTQ1_0:
++		return 28
+ 	case TensorTypeQ1_0:
+ 		return 2 + tt.blockSize()/8
+ 	default:
+@@ -241,7 +249,7 @@
+ 		return 1
+ 	case TensorTypeNVFP4:
+ 		return 64
+-	case TensorTypeQ1_0:
++	case TensorTypeQ1_0, TensorTypePQ2_0, TensorTypePTQ1_0:
+ 		return 128
+ 	case TensorTypeQ4_0,
+ 		TensorTypeQ4_1,
+@@ -341,6 +349,10 @@
+ 		return "mxfp4"
+ 	case TensorTypeNVFP4:
+ 		return "nvfp4"
++	case TensorTypePQ2_0:
++		return "pq2_0"
++	case TensorTypePTQ1_0:
++		return "ptq1_0"
+ 	case TensorTypeQ1_0:
+ 		return "q1_0"
+ 	default:
+--- a/fs/gguf/file_type.go
++++ b/fs/gguf/file_type.go
+@@ -45,6 +45,11 @@
+ 	fileTypeMXFP4MOE
+ 	fileTypeNVFP4
+ 	fileTypeQ1_0
++
++	// Published Prism GGUF file types, including the earlier PQ2_0 alias.
++	FileTypePQ2_0 FileType = 141
++	fileTypePQ2_0Legacy FileType = 142
++	FileTypePTQ1_0 FileType = 143
+ 
+ 	FileTypeUnknown FileType = 1024
+ )
+@@ -119,6 +124,10 @@
+ 		return "MXFP4_MOE"
+ 	case fileTypeNVFP4:
+ 		return "NVFP4"
++	case FileTypePQ2_0, fileTypePQ2_0Legacy:
++		return "PQ2_0"
++	case FileTypePTQ1_0:
++		return "PTQ1_0"
+ 	case fileTypeQ1_0:
+ 		return "Q1_0"
+ 	default:

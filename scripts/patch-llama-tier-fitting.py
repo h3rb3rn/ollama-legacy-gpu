@@ -490,6 +490,20 @@ def patch_ggml_cuda(path: Path) -> bool:
     if "// [OLLAMA_P2P_FIX]" in content:
         print("  ggml-cuda.cu already patched (P2P fix present)")
         return True
+
+    if not re.search(r'split_buffer|buffer_split|data_device', content):
+        # Newer GGML removed the split-buffer implementation. Verify its
+        # replacement selects the device before both host transfer directions.
+        for operation in ('set', 'get'):
+            pattern = (r'static void ggml_backend_cuda_buffer_' + operation
+                       + r'_tensor\([^\n]*\) \{\n'
+                       + r'[^}]*ggml_cuda_set_device\(ctx->device\);\s*'
+                       + r'CUDA_CHECK\(cudaMemcpyAsync\(')
+            if not re.search(pattern, content):
+                print('  Cannot verify device selection in the replacement CUDA buffer API', file=sys.stderr)
+                return False
+        print('  Split-buffer API removed upstream; replacement selects the CUDA device')
+        return True
         
     set_target = '        CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));'
     set_replacement = '        // [OLLAMA_P2P_FIX]\n        ggml_cuda_set_device(id);\n        CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));'
@@ -500,7 +514,7 @@ def patch_ggml_cuda(path: Path) -> bool:
     sync_target = '    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {\n        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));'
     sync_replacement = '    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {\n        ggml_cuda_set_device(id);\n        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));'
 
-    if set_target not in content or get_target not in content:
+    if set_target not in content or get_target not in content or sync_target not in content:
         print("  Error: split buffer target strings not found in ggml-cuda.cu", file=sys.stderr)
         return False
         
@@ -517,24 +531,16 @@ def find_fit_cpp_and_patch(ollama_root: Path) -> bool:
     print(f"Looking for llama.cpp {SOURCE_FILE} under {ollama_root}...")
     target = find_fit_cpp(ollama_root)
     if not target:
-        print(f"  {SOURCE_FILE} not found — skipping (cmake configure may not have run yet)")
-        return True  # non-fatal
+        print(f"  Required patch target missing: {SOURCE_FILE}", file=sys.stderr)
+        return False
     print(f"  Target: {target}")
     ok = patch(target)
     if not ok:
         return False
         
-    # Also patch ggml-cuda.cu if it exists in the build dir
-    ggml_cuda_path = ollama_root / "build" / "llama-server-cuda_v12" / "_deps" / "llama_cpp-src" / "ggml" / "src" / "ggml-cuda" / "ggml-cuda.cu"
-    if ggml_cuda_path.is_file():
-        patch_ggml_cuda(ggml_cuda_path)
-    else:
-        # Also try other build directory (v11) if it exists
-        ggml_cuda_path_v11 = ollama_root / "build" / "llama-server-cuda_v11" / "_deps" / "llama_cpp-src" / "ggml" / "src" / "ggml-cuda" / "ggml-cuda.cu"
-        if ggml_cuda_path_v11.is_file():
-            patch_ggml_cuda(ggml_cuda_path_v11)
-            
-    return True
+    # Use the same native tree for all CUDA variants, including cuda_v13.
+    ggml_cuda_path = target.parent.parent / "ggml" / "src" / "ggml-cuda" / "ggml-cuda.cu"
+    return patch_ggml_cuda(ggml_cuda_path)
 
 
 def main():
@@ -542,11 +548,8 @@ def main():
         print(f"Usage: {sys.argv[0]} <ollama-source-root>", file=sys.stderr)
         sys.exit(1)
     if not find_fit_cpp_and_patch(Path(sys.argv[1])):
-        print("Patch failed — build continues with original behavior.", file=sys.stderr)
-    # Always exit 0 (non-fatal)
-    sys.exit(0)
+        sys.exit("GPU fitting/P2P patch failed; review upstream changes before releasing")
 
 
 if __name__ == "__main__":
     main()
-

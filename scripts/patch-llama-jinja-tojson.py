@@ -50,6 +50,7 @@ REPLACEMENT = (
 
 def find_value_cpp(ollama_root: Path) -> Path | None:
     candidates = [
+        ollama_root / "build" / "llama-server-cuda_v13" / "_deps" / "llama_cpp-src" / SOURCE_FILE,
         ollama_root / "build" / "llama-server-cuda_v12" / "_deps" / "llama_cpp-src" / SOURCE_FILE,
         ollama_root / "build" / "llama-server-cuda_v11" / "_deps" / "llama_cpp-src" / SOURCE_FILE,
         ollama_root / "llama" / "llama.cpp" / SOURCE_FILE,
@@ -94,15 +95,11 @@ def main():
     print(f"Looking for llama.cpp {SOURCE_FILE} under {ollama_root}...")
     target = find_value_cpp(ollama_root)
     if not target:
-        print(f"  {SOURCE_FILE} not found — skipping (cmake configure may not have run yet)")
-        sys.exit(0)  # non-fatal
+        sys.exit(f"Required patch target missing: {SOURCE_FILE}; run cmake configure first")
 
     print(f"  Target: {target}")
     if not patch(target):
-        print("Patch failed — build continues with original behavior.", file=sys.stderr)
-
-    # Always exit 0 (non-fatal)
-    sys.exit(0)
+        sys.exit("Jinja compatibility patch failed; review upstream changes before releasing")
 
 
 if __name__ == "__main__":

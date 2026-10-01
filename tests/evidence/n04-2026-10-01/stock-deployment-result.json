@@ -1,0 +1,82 @@
+[
+  {
+    "target": "ollama",
+    "image": "ollama/ollama@sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01",
+    "previous_container": "9699d0d9e8ee8537d5dcdf460cc441076de13110c85c833a4f5d541681be122a",
+    "rollback_container": "ollama-pre-stock-20261001-114931",
+    "version": {
+      "version": "0.35.0"
+    },
+    "gpu_uuids": [
+      "GPU-ed954d67-584b-f101-ae1e-5cd4df31cebc",
+      "GPU-6e62055a-46d4-e5e1-41d6-90efc6aa3dbb",
+      "GPU-63bfbd4b-9dd7-75ee-e025-d7c8966fcc42",
+      "GPU-6cf8a010-9ab8-f640-b5d4-b88540b220b7"
+    ],
+    "model": "qwen3.8:27b",
+    "loaded": [
+      {
+        "name": "qwen3.8:27b",
+        "model": "qwen3.8:27b",
+        "size": 26569185685,
+        "digest": "efac16c8404a041eba4fbdfdd56ace146025eeacbc8591c3ff027a0a3289967a",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen35",
+          "families": [
+            "qwen35"
+          ],
+          "parameter_size": "27.3B",
+          "quantization_level": "Q4_K_M"
+        },
+        "expires_at": "2026-10-02T11:56:09.173452505Z",
+        "size_vram": 26569185685,
+        "context_length": 262144
+      }
+    ],
+    "eval_count": 63,
+    "tokens_per_second": 3.600421146404954,
+    "passed": true,
+    "container_id": "5338115b5a688bab273902cefd5d408b82a24b3f14d9789e42a8b9694342d6c2"
+  },
+  {
+    "target": "ollama-rgtx",
+    "image": "ollama/ollama@sha256:2a6e883b917fc543389599dae79918f5cac9e1438890506982f44aa4f5625d01",
+    "previous_container": "ca1259b3f14777c294fa62137910874724e78dc813df889e59e8377b74f5a83a",
+    "rollback_container": "ollama-rgtx-pre-stock-20261001-114931",
+    "version": {
+      "version": "0.35.0"
+    },
+    "gpu_uuids": [
+      "GPU-fb5f0ecf-b19c-6899-c507-215130ede1a6",
+      "GPU-04dd9215-d446-8bf1-1010-0f61530f1770"
+    ],
+    "model": "hf.co/h3rb3rn/moe-sovereign-planner-9b:Q4_K_M",
+    "loaded": [
+      {
+        "name": "hf.co/h3rb3rn/moe-sovereign-planner-9b:Q4_K_M",
+        "model": "hf.co/h3rb3rn/moe-sovereign-planner-9b:Q4_K_M",
+        "size": 10247376730,
+        "digest": "429a863fee7a07a758f31d3608daa5b57766fb8a4137566d0b5ef00439a0627f",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "qwen35",
+          "families": [
+            "qwen35"
+          ],
+          "parameter_size": "8.95B",
+          "quantization_level": "unknown"
+        },
+        "expires_at": "2026-10-02T11:57:18.984693313Z",
+        "size_vram": 10247376730,
+        "context_length": 262144
+      }
+    ],
+    "eval_count": 449,
+    "tokens_per_second": 23.30894027642119,
+    "passed": true,
+    "container_id": "57cc7607818f25f45a9d14ed45e2c5ff22e64527cb78b894ff859dba29cc9c35"
+  }
+]

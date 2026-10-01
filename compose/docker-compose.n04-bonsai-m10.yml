@@ -1,0 +1,40 @@
+# Qualified local image on N04. Never pull an untested moving tag.
+# Start only this service; the old single-M10 service definitions are obsolete.
+services:
+  ollama-tesla-bonsai:
+    image: sha256:c5ae3f17cfd9bc116dacc141bb5562bc92732aaf190e0ab3d3968a60f5aa24ab
+    pull_policy: never
+    container_name: ollama-tesla-bonsai
+    command: [serve]
+    network_mode: bridge
+    ports:
+      - "11436:11434"
+    volumes:
+      - /opt/ollama/models:/root/.ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_INTERNAL_PORT: "11434"
+      OLLAMA_CONTEXT_LENGTH: "190000"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_LOAD_TIMEOUT: "30m"
+      OLLAMA_FLASH_ATTENTION: "true"
+      OLLAMA_KV_CACHE_TYPE: "q8_0"
+      OLLAMA_SCHED_SPREAD: "true"
+      OLLAMA_GPU_AUTODETECT: "0"
+      OLLAMA_AUTO_OPTIMIZE: "0"
+      OLLAMA_FAST_GPU_DEVICES: ""
+      OLLAMA_FAST_POOL_VRAM_GB: ""
+      OLLAMA_FORCE_GPU_LAYERS: ""
+      OLLAMA_CACHED_TENSOR_SPLIT: ""
+      CUDA_VISIBLE_DEVICES: "GPU-f668b685-3c6d-0fc7-1f85-960a0607c561,GPU-086bd19b-5a4c-a6dc-8c82-9c1a5276b0b2,GPU-7b3bd39b-b948-09a6-8ef9-756406efdb99,GPU-113fd30d-cb6f-ad02-0803-2c2b9053709d"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              device_ids:
+                - GPU-f668b685-3c6d-0fc7-1f85-960a0607c561
+                - GPU-086bd19b-5a4c-a6dc-8c82-9c1a5276b0b2
+                - GPU-7b3bd39b-b948-09a6-8ef9-756406efdb99
+                - GPU-113fd30d-cb6f-ad02-0803-2c2b9053709d
+    restart: unless-stopped

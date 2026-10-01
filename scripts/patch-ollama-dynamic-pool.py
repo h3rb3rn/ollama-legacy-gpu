@@ -37,6 +37,7 @@ INSERT_BEFORE = "params = appendFlashAttentionArgs(params, launch.gpus)"
 
 
 POOL_SELECT_FUNC = '''
+// OLLAMA_FAST_POOL_VRAM_GB_v4
 // Imports needed by selectGPUPool (strings for TrimSpace on override file)
 // Note: "strings", "os", "strconv" are already imported in llama_server.go.
 
@@ -283,6 +284,9 @@ def patch(path: Path) -> bool:
     if PATCH_GUARD in content:
         print(f"  Already patched: {path}")
         return True
+    if 'func selectGPUPool(' in content:
+        print('  Unrecognized existing pool patch; use a clean upstream source tree', file=sys.stderr)
+        return False
 
     if INSERT_BEFORE not in content:
         print(f"  Marker not found: {INSERT_BEFORE!r}", file=sys.stderr)
@@ -296,15 +300,8 @@ def patch(path: Path) -> bool:
         insert_marker = "// LlamaServerFlashAttention"
         new_content = content.replace(insert_marker, POOL_SELECT_FUNC + insert_marker, 1)
     else:
-        # Fallback: insert before the INSERT_BEFORE line
-        new_content = content.replace(
-            INSERT_BEFORE,
-            "selectGPUPool(&launch)\n\t" + INSERT_BEFORE,
-            1
-        )
-        # This won't have the function definition — needs separate placement
-        # Just add the call for now
-        print("  Warning: FA function not found, adding call only")
+        print('  FA function anchor missing; cannot place the pool helper', file=sys.stderr)
+        return False
 
     if new_content == content:
         print(f"  No change made", file=sys.stderr)
@@ -418,12 +415,10 @@ def main():
     print(f"Looking for {TARGET_FILE} under {root}...")
     target = find_target(root)
     if not target:
-        print(f"  {TARGET_FILE} not found — skipping")
-        sys.exit(0)
+        sys.exit(f"Required patch target missing: {TARGET_FILE}")
     print(f"  Target: {target}")
     if not patch(target):
-        print("Dynamic pool patch failed — original behavior unchanged.", file=sys.stderr)
-    sys.exit(0)
+        sys.exit("Dynamic pool patch failed; review upstream changes before releasing")
 
 
 if __name__ == "__main__":

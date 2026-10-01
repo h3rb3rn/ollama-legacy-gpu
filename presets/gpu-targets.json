@@ -1,0 +1,26 @@
+{
+  "cuda11-legacy": {
+    "dockerfile": "dockerfiles/Dockerfile.cuda11-legacy",
+    "architectures": "37-real;50-real;52-real",
+    "flash_attention": "OFF",
+    "description": "CUDA 11.8: Kepler K80 and Maxwell",
+    "compute_capabilities": [37, 50, 52],
+    "validation_cache_types": ["f16"]
+  },
+  "cuda12-maxwell": {
+    "dockerfile": "dockerfiles/Dockerfile.cuda12-maxwell",
+    "architectures": "50-real;52-real;60-real;61-real;70-real",
+    "flash_attention": "ON",
+    "description": "CUDA 12: Maxwell M10/M60, Pascal GTX 10, Volta",
+    "compute_capabilities": [50, 52, 60, 61, 70],
+    "validation_cache_types": ["q8_0", "q4_0"]
+  },
+  "cuda13-rtx": {
+    "dockerfile": "dockerfiles/Dockerfile.cuda13-rtx",
+    "architectures": "75-real;80-real;86-real;89-real;90-real;100-real;120-real;120-virtual",
+    "flash_attention": "ON",
+    "description": "CUDA 13: Turing GTX 16/RTX 20 through Blackwell",
+    "compute_capabilities": [75, 80, 86, 89, 90, 100, 120],
+    "validation_cache_types": ["q8_0", "q4_0"]
+  }
+}

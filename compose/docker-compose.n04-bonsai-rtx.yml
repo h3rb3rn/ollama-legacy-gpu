@@ -1,0 +1,38 @@
+# Dedicated N04 RTX instance, port 11434. Uses the existing shared model pool.
+# Native fitting includes KV and compute memory; the dynamic fast-pool
+# heuristic's fixed 1.1 layer overhead is insufficient for Bonsai at 256k.
+services:
+  ollama:
+    image: ${BONSAI_RTX_IMAGE:-ollama-bonsai:rtx-fa-cuda13-20260929}
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - /opt/ollama/models:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_INTERNAL_PORT: "11434"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_SCHED_SPREAD: "true"
+      OLLAMA_FLASH_ATTENTION: "true"
+      OLLAMA_KV_CACHE_TYPE: q4_0
+      OLLAMA_LOAD_TIMEOUT: 30m
+      OLLAMA_AUTO_OPTIMIZE: "0"
+      OLLAMA_GPU_AUTODETECT: "0"
+      OLLAMA_FAST_GPU_DEVICES: ""
+      OLLAMA_FAST_POOL_VRAM_GB: ""
+      OLLAMA_FORCE_GPU_LAYERS: ""
+      OLLAMA_CACHED_TENSOR_SPLIT: ""
+      CUDA_VISIBLE_DEVICES: GPU-ed954d67-584b-f101-ae1e-5cd4df31cebc,GPU-6cf8a010-9ab8-f640-b5d4-b88540b220b7,GPU-6e62055a-46d4-e5e1-41d6-90efc6aa3dbb,GPU-63bfbd4b-9dd7-75ee-e025-d7c8966fcc42
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids:
+                - GPU-ed954d67-584b-f101-ae1e-5cd4df31cebc
+                - GPU-6cf8a010-9ab8-f640-b5d4-b88540b220b7
+                - GPU-6e62055a-46d4-e5e1-41d6-90efc6aa3dbb
+                - GPU-63bfbd4b-9dd7-75ee-e025-d7c8966fcc42
+              capabilities: [gpu]

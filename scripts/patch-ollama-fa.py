@@ -58,7 +58,7 @@ def find_target(ollama_root: Path) -> Path | None:
 def patch(path: Path) -> bool:
     content = path.read_text()
 
-    if PATCH_GUARD in content:
+    if '// [OLLAMA_GPU_TIER_THRESHOLD patch]' in content:
         print(f"  Already patched: {path}")
         return True
 
@@ -140,14 +140,13 @@ def main():
 
     target = find_target(root)
     if not target:
-        print(f"  {TARGET_FILE} not found — skipping (non-fatal)")
-        sys.exit(0)
+        print(f"  Required patch target missing: {TARGET_FILE}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"  Target: {target}")
 
     if not patch(target):
-        print("FA patch failed — building with original FA behavior.", file=sys.stderr)
-    sys.exit(0)  # non-fatal: build continues
+        sys.exit("FA patch failed; review upstream changes before releasing")
 
 
 if __name__ == "__main__":
