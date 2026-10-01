@@ -1,0 +1,3 @@
+# Unified diff context uses a leading space before Go tabs and on empty lines.
+# Preserve that patch syntax instead of treating it as source-file whitespace.
+patches/bonsai/*.patch -whitespace
