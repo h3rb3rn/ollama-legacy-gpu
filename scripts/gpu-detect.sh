@@ -16,6 +16,7 @@
 OUTPUT_FILE="${1:-/tmp/ollama-gpu-config.env}"
 
 python3 - "$OUTPUT_FILE" << 'PYEOF'
+import os
 import sys
 import ctypes
 
@@ -143,6 +144,50 @@ if not gpus:
 
 gpus.sort(key=lambda g: (g['bw_gbs'], g['cc']))
 
+# ── Architecture guard ───────────────────────────────────────────────────────
+# The image records the CUBIN/PTX targets it was built with in CUDA_ARCHS
+# (e.g. "50-real;52-real;75-real;120-virtual"). A GPU that none of them covers
+# passes discovery in some code paths and then dies on the first kernel launch
+# ("no kernel image is available for execution on the device"). Exclude such
+# GPUs here, loudly, instead of letting the pool crash at inference time.
+#   OLLAMA_UNSUPPORTED_GPU=mask (default) | fail | ignore
+def _load_archs(path):
+    try:
+        raw = open(path).read().strip()
+    except OSError:
+        return None
+    real, virtual = set(), set()
+    for tok in raw.replace(',', ';').split(';'):
+        tok = tok.strip()
+        if tok.endswith('-real') and tok[:-5].isdigit():
+            real.add(int(tok[:-5]))
+        elif tok.endswith('-virtual') and tok[:-8].isdigit():
+            virtual.add(int(tok[:-8]))
+        elif tok.isdigit():
+            real.add(int(tok)); virtual.add(int(tok))
+    return (real, virtual) if (real or virtual) else None
+
+def _covers(archs, cc):
+    real, virtual = archs
+    # A CUBIN runs on the same major with an equal or higher minor; PTX runs on
+    # any GPU at or above its virtual architecture.
+    return any(a // 10 == cc // 10 and a <= cc for a in real) or any(a <= cc for a in virtual)
+
+_mode = os.environ.get('OLLAMA_UNSUPPORTED_GPU', 'mask').lower()
+_archs = _load_archs(os.environ.get('OLLAMA_CUDA_ARCHS_FILE', '/usr/lib/ollama/CUDA_ARCHS'))
+unsupported = []
+if _archs and _mode != 'ignore':
+    unsupported = [g for g in gpus if not _covers(_archs, g['cc'])]
+    for g in unsupported:
+        print(f"gpu-detect: GPU {g['name']} (CC {g['cc']/10:.1f}, {g['uuid']}) is not covered by this "
+              f"image's CUDA targets; use a build that includes sm_{g['cc']}", file=sys.stderr)
+    if unsupported and _mode == 'fail':
+        sys.exit(3)
+    gpus = [g for g in gpus if g not in unsupported]
+    if not gpus:
+        print("gpu-detect: no GPU supported by this image", file=sys.stderr)
+        sys.exit(3)
+
 cuda_visible = ','.join(g['uuid'] for g in gpus)
 
 # Legacy = CC < 70 (Kepler 37, Maxwell 50/52, Pascal 60/61)
@@ -218,6 +263,9 @@ lines += [
     # Used for the full pool when model exceeds the FA-capable fast pool:
     # RTX3060 becomes CUDA0 (primary orchestrator), reducing the gallocr compute
     # buffer from ~11.4 GiB (12 GPUs) to ~5.7 GiB (6 GPUs). Tesla excluded.
+    # MTP speculative decoding crashes on Maxwell (BUG-hybrid-arch-degeneration.md, Finding 2):
+    # disable the draft head by default whenever a legacy GPU can take part in a load.
+    f"OLLAMA_DRAFT_NUM_PREDICT={0 if has_legacy else 4}",
     f"OLLAMA_NONLEGACY_REVERSED={','.join(g['uuid'] for g in reversed(gpus) if g['cc'] >= 61)}",
     f"OLLAMA_NONLEGACY_VRAM_GB={int(sum(g['vram_bytes'] for g in gpus if g['cc'] >= 61) / 1e9)}",
 ]

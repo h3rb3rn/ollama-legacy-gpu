@@ -134,6 +134,7 @@ RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
 #   installed by cmake — must be copied manually from the build directory.
 #   libnccl is linked by libggml-cuda.so and must come from the builder image.
 RUN mkdir -p /runtime \
+    && printf '%s\n' "${CUDA_ARCHITECTURES}" > /runtime/CUDA_ARCHS \
     && cp -aT /src/dist/lib/ollama /runtime \
     && find /src/dist/lib -maxdepth 1 -name 'lib*.so*' -exec cp -P {} /runtime/ \; \
     && find /src/build/llama-server-cuda_v11/bin -maxdepth 1 \( -type f -o -type l \) \

@@ -18,7 +18,7 @@ def load(name):
 class CompatibilityGuards(unittest.TestCase):
     def test_missing_upstream_files_fail_the_build(self):
         with tempfile.TemporaryDirectory() as root:
-            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch',
+            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy',
                          'patch-llama-tier-fitting', 'patch-llama-jinja-tojson'):
                 with self.subTest(patch=name):
                     result = subprocess.run([sys.executable, str(SCRIPTS / (name + '.py')), root],
@@ -48,6 +48,49 @@ class CompatibilityGuards(unittest.TestCase):
             self.assertTrue(module.patch_ggml_cuda(path))
             path.write_text(content.replace('ggml_cuda_set_device(ctx->device);', '', 1))
             self.assertFalse(module.patch_ggml_cuda(path))
+
+    def test_discovery_patch_is_idempotent_and_fails_closed(self):
+        module = load('patch-ollama-discovery')
+        src = (module.LOOKUP_OLD + '\n' + module.UNKNOWN_OLD + '\n' + module.COMPUTE_OLD + '\n')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'llama_server.go'
+            path.write_text(src)
+            self.assertTrue(module.patch(path))
+            first = path.read_text()
+            self.assertIn('OLLAMA_ALLOW_UNKNOWN_CC', first)
+            self.assertIn('cudaDeviceIndex(name, deviceIndex)', first)
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+            path.write_text('unrelated go source\n')
+            self.assertFalse(module.patch(path))
+
+    def test_mtp_default_patch_is_idempotent_and_respects_explicit_options(self):
+        module = load('patch-ollama-mtp-default')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'routes.go'
+            path.write_text(module.ANCHOR)
+            self.assertTrue(module.patch(path))
+            first = path.read_text()
+            self.assertIn('if !draftNumPredictSet', first)
+            self.assertIn('OLLAMA_DRAFT_NUM_PREDICT', first)
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+            path.write_text('unrelated\n')
+            self.assertFalse(module.patch(path))
+
+    def test_cuda_graph_patch_is_opt_in_and_idempotent(self):
+        module = load('patch-llama-cuda-graphs-legacy')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'ggml-cuda.cu'
+            path.write_text(module.FUNC + '    if (graph->graph == nullptr) {\n' + module.OLD + '    }\n}\n')
+            self.assertTrue(module.patch(path))
+            first = path.read_text()
+            self.assertIn('getenv("GGML_CUDA_GRAPHS_LEGACY")', first)
+            self.assertIn('&& !ggml_cuda_legacy_graphs_enabled()', first)
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+            path.write_text('unrelated\n')
+            self.assertFalse(module.patch(path))
 
 
 if __name__ == '__main__':

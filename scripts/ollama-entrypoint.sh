@@ -40,7 +40,13 @@ OLLAMA_BACKEND_URL="http://localhost:${OLLAMA_INTERNAL_PORT}"
 # ── Step 1: GPU auto-detection ────────────────────────────────────────────────
 if [[ "$AUTODETECT" == "1" ]] && [[ -x "$DETECT_SCRIPT" ]]; then
     echo "[entrypoint] Running GPU auto-detection..."
-    if "$DETECT_SCRIPT" "$CONFIG_FILE" 2>&1; then
+    DETECT_RC=0
+    "$DETECT_SCRIPT" "$CONFIG_FILE" 2>&1 || DETECT_RC=$?
+    if [[ "$DETECT_RC" == "3" ]]; then
+        echo "[entrypoint] FATAL: no visible GPU is supported by this image (see gpu-detect output)." >&2
+        echo "[entrypoint] Use the matching build (cuda12-maxwell: CC 5.0-9.0, cuda13-rtx: CC 7.5+) or set OLLAMA_UNSUPPORTED_GPU=ignore." >&2
+        exit 3
+    elif [[ "$DETECT_RC" == "0" ]]; then
         echo "[entrypoint] GPU config written to $CONFIG_FILE"
         # Apply GPU structural settings (always applied)
         while IFS='=' read -r key value; do
@@ -52,7 +58,7 @@ if [[ "$AUTODETECT" == "1" ]] && [[ -x "$DETECT_SCRIPT" ]]; then
                 OLLAMA_NONLEGACY_REVERSED|OLLAMA_NONLEGACY_VRAM_GB)
                     export "$key"="$value"
                     ;;
-                OLLAMA_FLASH_ATTENTION|OLLAMA_KV_CACHE_TYPE)
+                OLLAMA_FLASH_ATTENTION|OLLAMA_KV_CACHE_TYPE|OLLAMA_DRAFT_NUM_PREDICT)
                     # Apply only if not manually set
                     if [[ -z "${!key:-}" ]]; then
                         export "$key"="$value"

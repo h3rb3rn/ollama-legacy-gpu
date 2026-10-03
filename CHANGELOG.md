@@ -4,6 +4,39 @@ All notable changes to this fork are documented here.
 
 ---
 
+## [Unreleased] — 2026-10-03 (RTX/Tesla gaps, siehe RTX-TESLA-GAPS-PROMPT.md)
+
+Status: Python-Tests (37) und `go build/test ./discover ./server` auf v0.35.0 grün; Test-Image
+`ollama-gaps:test-20261003` (CUDA 12.0.1, Archs 50;52;61;75;86, FA=ON, BONSAI=OFF) auf den `:11434`-Instanzen von
+N11-M10, N02-M60 und N04-RTX getestet (2026-10-03/04).
+
+Messwerte `qwen3.6:35b` (120 Token, temperature 0):
+- N04-RTX (4 RTX, Pool :11434): Stock 0.35.0 33.05 tok/s → Fork-Image 40.0–40.6 tok/s; 42/42 Layer, kein „no kernel image“.
+- N11-M10 (i5-3470T): 6.3–6.5 tok/s → mit `GGML_CUDA_GRAPHS_LEGACY=1` 8.6 tok/s (+35 %); 2048-Token-Lauf stabil (8.3 tok/s).
+- N02-M60: 12.6–13.7 tok/s ohne, 12.4–13.2 mit Graph-Schalter (kein Effekt; Wirkung hängt von der Host-CPU ab).
+- Gap 2: Modell ohne Modelfile-Override, Autodetect-Defaultpfad → `OLLAMA_DRAFT_NUM_PREDICT=0` gesetzt, kein Crash.
+
+### Fixed / Added
+
+- **Gap 1 — RTX/Turing/Ampere:** `cuda12-maxwell` baut jetzt `50…90` (inkl. 75/80/86/89/90), damit gemischte
+  Hosts (N04-RTX: Maxwell + Pascal + Turing + Ampere in einem Container) ein Image bekommen; CUDA 13 kann
+  Maxwell nicht. Vorher: Preset `50;52;60;61;70` → RTX wurde verworfen, bei unbestimmter CC aber trotzdem geladen.
+  - `scripts/patch-ollama-discovery.py`: CC per CUDA-Index aus dem Gerätenamen statt Positionszähler; unbekannte
+    CC bei bekannter Arch-Liste → Gerät wird übersprungen (Override `OLLAMA_ALLOW_UNKNOWN_CC=1`).
+  - Images schreiben ihre Targets nach `/usr/lib/ollama/CUDA_ARCHS`; `gpu-detect.sh` maskiert nicht abgedeckte GPUs
+    (`OLLAMA_UNSUPPORTED_GPU=mask|fail|ignore`), Entrypoint bricht mit Exit 3 ab, wenn keine GPU passt.
+- **Gap 2 — MTP-Schutz ohne Proxy:** `scripts/patch-ollama-mtp-default.py` führt `OLLAMA_DRAFT_NUM_PREDICT` als
+  serverweiten Default für `draft_num_predict` ein (explizite Modell-/Request-Werte gewinnen). `gpu-detect.sh`
+  setzt 0, sobald eine Legacy-GPU (CC < 70) sichtbar ist. Gilt damit für jedes Modell, auch Pool-Container.
+- **Gap 3 (Teilergebnis):** `scripts/patch-llama-cuda-graphs-legacy.py` — ggml-cuda deaktiviert CUDA-Graphs fest für CC < 7.0;
+  opt-in `GGML_CUDA_GRAPHS_LEGACY=1`. Hilft auf CPU-schwachen Hosts (N11-M10), nicht auf N02-M60. Standardmäßig aus.
+- **Beobachtung Gap 1:** Auf N04-RTX (12 GPUs) läuft ein Discovery-Durchlauf in den Watchdog-Timeout; die CC-Zeilen fehlen
+  dann, die Geräte werden jetzt übersprungen statt blind geladen. Ein zweiter Durchlauf erkennt alle 4 RTX korrekt.
+- **Offen:** Gap 3 (vollständiges Profiling, kein nsys), Gap 4 (nextn-Layer CPU-mapped); Mixed-Pool Maxwell+RTX in
+  *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
+
+---
+
 ## [v0.30.0] — 2026-06-25
 
 **Based on:** Ollama v0.30.10  

@@ -79,6 +79,9 @@ COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
 COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
+COPY scripts/patch-ollama-discovery.py    /tmp/patch-ollama-discovery.py
+COPY scripts/patch-ollama-mtp-default.py  /tmp/patch-ollama-mtp-default.py
+COPY scripts/patch-llama-cuda-graphs-legacy.py /tmp/patch-llama-cuda-graphs-legacy.py
 COPY scripts/prepare-bonsai.py           /tmp/prepare-bonsai.py
 COPY patches/bonsai                     /tmp/bonsai-patches
 
@@ -154,6 +157,8 @@ RUN if [ "${BONSAI}" = ON ]; then \
 # upstream mechanism above, which was already correct.
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
 RUN python3 /tmp/patch-llama-jinja-tojson.py /src
+# CUDA graphs on CC < 7.0, opt-in via GGML_CUDA_GRAPHS_LEGACY=1 (Gap 3: host-bound decode on Maxwell)
+RUN python3 /tmp/patch-llama-cuda-graphs-legacy.py /src
 
 # Step 3: cmake build + install
 # NOTE: No --component filter → installs llama-server binary + CUDA libs.
@@ -172,6 +177,7 @@ RUN --mount=type=cache,id=ollama-ccache,target=/root/.ccache \
 #   installed by cmake — must be copied manually from the build directory.
 #   libnccl is linked by libggml-cuda.so and must come from the builder image.
 RUN mkdir -p /runtime \
+    && printf '%s\n' "${CUDA_ARCHITECTURES}" > /runtime/CUDA_ARCHS \
     && cp -aT /src/dist/lib/ollama /runtime \
     && find /src/dist/lib -maxdepth 1 -name 'lib*.so*' -exec cp -P {} /runtime/ \; \
     && find /src/build/llama-server-cuda_v12/bin -maxdepth 1 \( -type f -o -type l \) \
@@ -190,6 +196,12 @@ RUN python3 /tmp/patch-ollama-dynamic-pool.py /src
 #    Reduces prefill compute buffer (batch × ctx × heads × 4 bytes) so Tesla
 #    GPUs can participate in multi-GPU inference without OOM.
 RUN python3 /tmp/patch-ollama-batch.py /src
+# 4. Discovery: resolve CC by CUDA index and skip devices whose CC cannot be verified
+#    against the compiled architectures (no more blind load -> "no kernel image").
+RUN python3 /tmp/patch-ollama-discovery.py /src
+# 5. MTP default: OLLAMA_DRAFT_NUM_PREDICT as server-wide draft_num_predict default,
+#    so pool-style containers without the proxy are protected from the Maxwell MTP crash.
+RUN python3 /tmp/patch-ollama-mtp-default.py /src
 
 RUN if [ "${BONSAI}" = ON ]; then \
       cp BONSAI_SOURCE.json /runtime/BONSAI_SOURCE.json \

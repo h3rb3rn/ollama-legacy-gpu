@@ -9,10 +9,10 @@
   },
   "cuda12-maxwell": {
     "dockerfile": "dockerfiles/Dockerfile.cuda12-maxwell",
-    "architectures": "50-real;52-real;60-real;61-real;70-real",
+    "architectures": "50-real;52-real;60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real",
     "flash_attention": "ON",
-    "description": "CUDA 12: Maxwell M10/M60, Pascal GTX 10, Volta",
-    "compute_capabilities": [50, 52, 60, 61, 70],
+    "description": "CUDA 12: Maxwell M10/M60, Pascal GTX 10, Volta, Turing/Ampere/Ada/Hopper (mixed hosts)",
+    "compute_capabilities": [50, 52, 60, 61, 70, 75, 80, 86, 89, 90],
     "validation_cache_types": ["q8_0", "q4_0"]
   },
   "cuda13-rtx": {

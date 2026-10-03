@@ -21,6 +21,10 @@ class ToolkitRouting(unittest.TestCase):
     def test_turing_ampere_rtx_pool(self):
         self.assertEqual(matrix.select(self.rows, [75, 86]), 'cuda13-rtx')
 
+    def test_mixed_maxwell_and_rtx_host_gets_one_image(self):
+        # N04-RTX: Tesla M10/M60 + GTX 1060 + RTX 2060/3060 in one container.
+        self.assertEqual(matrix.select(self.rows, [50, 52, 61, 75, 86]), 'cuda12-maxwell')
+
     def test_blackwell(self):
         self.assertEqual(matrix.select(self.rows, [120]), 'cuda13-rtx')
 
