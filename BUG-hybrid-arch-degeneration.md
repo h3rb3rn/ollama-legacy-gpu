@@ -749,3 +749,52 @@ names. `ollama` and `ollama-rgtx` share the same `/opt/ollama/models` volume, so
 **Residual gap on these two containers:** any *future* qwen35-family model pulled
 here with a native MTP head will still crash on first use — there's no systemic
 protection without a proxy, only this one model has been hardened so far.
+
+### 2026-10-03 update: N02-M60 4-GPU pool crash was the same MTP bug, not a new
+### FA/multi-GPU issue — fixed on `qwen3.6:35b` itself, pool restored to FA=ON
+
+Re-opened during an unrelated investigation into why `qwen3.6:35b` with
+`FA=ON` + `q4_0` KV-cache crashed on N02-M60's 4-GPU pool (`ollama-m60-pool`,
+GPU0-3) at ~190k context, while the structurally identical N11-M10 4-GPU
+pool had been running the same model/settings stably since Phase 9. Initial
+hypotheses (PCIe topology — PIX-only pairs vs. PXB cross-card hops on
+N02-M60's 12-GPU board; pool size/GPU count) were tested and **both ruled
+out**: `gpt-oss:20b` (no native MTP head) ran cleanly on N02-M60 across both
+a PIX pair (GPU6+7) and a PXB pair (GPU6+8), 2/2 runs each, no crash.
+
+**Actual root cause: this was Finding 2 (MTP speculative-decoding race)
+again**, not a new bug. `ollama-m60-pool` runs with `OLLAMA_AUTO_OPTIMIZE=0`
+(no `ollama-proxy.py` in front of it — same category of gap already flagged
+above for the non-proxied RTX containers) and the plain `qwen3.6:35b` tag on
+this host carries `draft_num_predict=2` in its Modelfile (not 0 — this host
+was never touched by the 2026-09-16 systemic proxy fix, since the pool
+doesn't run the proxy at all). Crash reproduced live: identical stack trace
+(`common_speculative_impl_draft_mtp::draft` → `ggml_backend_cuda_synchronize`,
+`CUDA error: an illegal memory access was encountered`) plus a fresh Xid 31
+MMU fault, triggered exactly at the prompt→generation transition of a real
+~11k-token production prompt on GPU3.
+
+**Fix:** same as the N04-RTX non-proxy fix above — overwrote the plain
+`qwen3.6:35b` tag in place (`ollama create qwen3.6:35b -f <modelfile>` with
+`draft_num_predict 0` instead of `2`), rather than relying on the `-nospec`
+tag or a proxy. Confirmed the MTP draft head (`blk.40.nextn.*` tensors) is
+now skipped entirely at load time (logged as "unused tensor ... ignoring"),
+dropping GPU layer-offload from 42/42 to 41/42 (one layer's core weights
+spill to `CPU_Mapped`, costing roughly 3x prompt-eval throughput — a real
+performance trade-off for the fix on this specific host/model/context
+combination, not present on hosts with more VRAM headroom per GPU).
+
+**Verified stable on the restored 4-GPU pool (GPU0-3, FA=ON, q4_0) against
+two real production prompts (~11k tokens each, not synthetic) at both batch
+64 and batch 128**: `progress=1.00` → `init_sampler` → context checkpoint
+created, no crash, no new Xid, in both runs. This is the first time the
+*actual* `qwen3.6:35b` tag (not a substitute model) has been confirmed safe
+with `FA=ON` on N02-M60's specific 4-GPU pool topology at real-world prompt
+lengths — closes the gap this host had relative to N11-M10 and the N04-RTX
+guard instance.
+
+**Residual gap, same shape as the RTX one above:** this fix is per-model
+(the `qwen3.6:35b` tag specifically). Any other qwen35-family model with a
+native MTP head pulled onto this host will crash the same way until
+individually hardened — `ollama-m60-pool` has no proxy and no plan to add
+one in this session.
