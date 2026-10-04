@@ -18,7 +18,7 @@ def load(name):
 class CompatibilityGuards(unittest.TestCase):
     def test_missing_upstream_files_fail_the_build(self):
         with tempfile.TemporaryDirectory() as root:
-            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy',
+            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn',
                          'patch-llama-tier-fitting', 'patch-llama-jinja-tojson'):
                 with self.subTest(patch=name):
                     result = subprocess.run([sys.executable, str(SCRIPTS / (name + '.py')), root],
@@ -87,6 +87,20 @@ class CompatibilityGuards(unittest.TestCase):
             first = path.read_text()
             self.assertIn('getenv("GGML_CUDA_GRAPHS_LEGACY")', first)
             self.assertIn('&& !ggml_cuda_legacy_graphs_enabled()', first)
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+            path.write_text('unrelated\n')
+            self.assertFalse(module.patch(path))
+
+    def test_fit_nextn_patch_counts_slot_unconditionally_and_is_idempotent(self):
+        module = load('patch-llama-fit-nextn')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'fit.cpp'
+            path.write_text(module.OLD)
+            self.assertTrue(module.patch(path))
+            first = path.read_text()
+            self.assertNotIn('load_mtp', first)
+            self.assertIn('hp_ngl        += llama_model_n_layer_nextn(model);', first)
             self.assertTrue(module.patch(path))
             self.assertEqual(path.read_text(), first)
             path.write_text('unrelated\n')

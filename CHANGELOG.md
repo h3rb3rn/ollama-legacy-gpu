@@ -27,12 +27,17 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
     (`OLLAMA_UNSUPPORTED_GPU=mask|fail|ignore`), Entrypoint bricht mit Exit 3 ab, wenn keine GPU passt.
 - **Gap 2 — MTP-Schutz ohne Proxy:** `scripts/patch-ollama-mtp-default.py` führt `OLLAMA_DRAFT_NUM_PREDICT` als
   serverweiten Default für `draft_num_predict` ein (explizite Modell-/Request-Werte gewinnen). `gpu-detect.sh`
-  setzt 0, sobald eine Legacy-GPU (CC < 70) sichtbar ist. Gilt damit für jedes Modell, auch Pool-Container.
+  setzt 0 (zunächst nur bei Legacy-GPUs; seit der RTX-Messung für alle Hosts, da MTP auch dort langsamer ist). Gilt damit für jedes Modell, auch Pool-Container.
 - **Gap 3 (Teilergebnis):** `scripts/patch-llama-cuda-graphs-legacy.py` — ggml-cuda deaktiviert CUDA-Graphs fest für CC < 7.0;
   opt-in `GGML_CUDA_GRAPHS_LEGACY=1`. Hilft auf CPU-schwachen Hosts (N11-M10), nicht auf N02-M60. Standardmäßig aus.
 - **Beobachtung Gap 1:** Auf N04-RTX (12 GPUs) läuft ein Discovery-Durchlauf in den Watchdog-Timeout; die CC-Zeilen fehlen
   dann, die Geräte werden jetzt übersprungen statt blind geladen. Ein zweiter Durchlauf erkennt alle 4 RTX korrekt.
-- **Offen:** Gap 3 (vollständiges Profiling, kein nsys), Gap 4 (nextn-Layer CPU-mapped); Mixed-Pool Maxwell+RTX in
+- **Gap 4 (gelöst):** nicht der nextn-Layer, sondern ein Off-by-one: der Fit zählte den nextn-Slot nur mit `load_mtp`, der Lader
+  immer → Trunk-Layer 0 blieb bei MTP-aus auf der CPU (`41/42`). `scripts/patch-llama-fit-nextn.py`; auf allen drei Hosts 42/42.
+- **Ollama 0.35.1:** Fork baut ohne Bonsai (`BONSAI=OFF`, neuer CI-Default; `OLLAMA_BONSAI`-Variable bzw. Dispatch-Input `bonsai`).
+  Bonsai bricht auf 0.35.1 beim Compat-Patch `002-clef.patch` (Prism-Baum) — Nachzug folgt.
+- **Tuning:** siehe `TUNING-2026-10-04.md` (Batch 512: Prefill ×1.75–2.1; MTP-Default 0 für alle Hosts).
+- **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 
 ---

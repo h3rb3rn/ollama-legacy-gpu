@@ -76,6 +76,7 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
 
 COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
 COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
+COPY scripts/patch-llama-fit-nextn.py     /tmp/patch-llama-fit-nextn.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
 COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
@@ -156,6 +157,8 @@ RUN if [ "${BONSAI}" = ON ]; then \
 # reverted — it was redundant with (and briefly stacked on top of) the
 # upstream mechanism above, which was already correct.
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
+# Gap 4: count the nextn slot in the fit even with MTP off (else trunk layer 0 lands on the CPU)
+RUN python3 /tmp/patch-llama-fit-nextn.py /src
 RUN python3 /tmp/patch-llama-jinja-tojson.py /src
 # CUDA graphs on CC < 7.0, opt-in via GGML_CUDA_GRAPHS_LEGACY=1 (Gap 3: host-bound decode on Maxwell)
 RUN python3 /tmp/patch-llama-cuda-graphs-legacy.py /src

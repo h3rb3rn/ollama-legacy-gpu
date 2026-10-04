@@ -17,6 +17,10 @@ on:
         description: 'Published Ollama release tag, or latest'
         required: false
         default: latest
+      bonsai:
+        description: 'Build the pinned Prism Bonsai runtime (ON/OFF). Default follows repo variable OLLAMA_BONSAI, else OFF.'
+        required: false
+        default: ''
   repository_dispatch:
     types: [new-ollama-release]
 
@@ -30,6 +34,9 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/ollama-legacy
+  # Bonsai pins its own llama.cpp tree and needs per-release compat work; the plain fork
+  # build (OFF) must keep working for every upstream release meanwhile.
+  BONSAI: ${{ inputs.bonsai || vars.OLLAMA_BONSAI || 'OFF' }}
 
 jobs:
   prepare:
@@ -100,7 +107,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build immutable Bonsai candidate
+      - name: Build immutable candidate
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -109,13 +116,13 @@ jobs:
           push: true
           build-args: |
             OLLAMA_VERSION=${{ needs.prepare.outputs.version }}
-            BONSAI=ON
+            BONSAI=${{ env.BONSAI }}
             CUDA_ARCHITECTURES=${{ matrix.architectures }}
             GGML_CUDA_FA=${{ matrix.flash_attention }}
             JOBS=4
           tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}-native
-          cache-from: type=gha,scope=bonsai-${{ matrix.variant }}-v2
-          cache-to: type=gha,scope=bonsai-${{ matrix.variant }}-v2,mode=max
+          cache-from: type=gha,scope=${{ env.BONSAI == 'ON' && 'bonsai' || 'plain' }}-${{ matrix.variant }}-v2
+          cache-to: type=gha,scope=${{ env.BONSAI == 'ON' && 'bonsai' || 'plain' }}-${{ matrix.variant }}-v2,mode=max
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -123,7 +130,7 @@ jobs:
             org.opencontainers.image.description=Ollama with pinned Prism Bonsai runtime; ${{ matrix.description }}
       - name: Preserve ordinary Spark2.5 on Maxwell with isolated libraries
         id: compat
-        if: matrix.variant == 'cuda12-maxwell'
+        if: matrix.variant == 'cuda12-maxwell' && env.BONSAI == 'ON'
         uses: docker/build-push-action@v6
         with:
           context: .

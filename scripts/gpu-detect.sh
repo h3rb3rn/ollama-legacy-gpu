@@ -263,9 +263,12 @@ lines += [
     # Used for the full pool when model exceeds the FA-capable fast pool:
     # RTX3060 becomes CUDA0 (primary orchestrator), reducing the gallocr compute
     # buffer from ~11.4 GiB (12 GPUs) to ~5.7 GiB (6 GPUs). Tesla excluded.
-    # MTP speculative decoding crashes on Maxwell (BUG-hybrid-arch-degeneration.md, Finding 2):
-    # disable the draft head by default whenever a legacy GPU can take part in a load.
-    f"OLLAMA_DRAFT_NUM_PREDICT={0 if has_legacy else 4}",
+    # MTP speculative decoding is off by default:
+    #  - it crashes on Maxwell (BUG-hybrid-arch-degeneration.md, Finding 2), and
+    #  - it is slower on the RTX pool as well: qwen3.6:35b on 4x RTX 2060/3060 measured
+    #    40.3 tok/s without MTP, 38.0 with draft=2 and 28.4 with draft=4 (upstream default).
+    # Enable it per model/request (draft_num_predict) or set OLLAMA_DRAFT_NUM_PREDICT.
+    "OLLAMA_DRAFT_NUM_PREDICT=0",
     f"OLLAMA_NONLEGACY_REVERSED={','.join(g['uuid'] for g in reversed(gpus) if g['cc'] >= 61)}",
     f"OLLAMA_NONLEGACY_VRAM_GB={int(sum(g['vram_bytes'] for g in gpus if g['cc'] >= 61) / 1e9)}",
 ]
