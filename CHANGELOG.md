@@ -49,7 +49,8 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
     11682-Token-Prompt: 633 s, Prefill 19.0 tok/s, decode 7.0 tok/s; GPU0 7840/8192 MiB; keine Xid, kein OOM.
   - N04-RTX (2× RTX 2060 + 2× RTX 3060): 42/42, keine Gewichte im Host; decode 40.0 → 40.3 tok/s;
     11682-Token-Prompt: 27 s, Prefill 498 tok/s, decode 37.5 tok/s; keine Xid, kein OOM.
-  - N02-M60: nicht getestet (Rollout wurde dort vom Auto-Mode-Classifier blockiert).
+  - N02-M60 (4× M60 im Pool): 42/42, keine Gewichte im Host (CUDA0–3 zusammen 20.2 GiB); decode 14.1 → 15.3 tok/s, Laden ~121 s;
+    11682-Token-Prompt: 178 s, Prefill 69.3 tok/s, decode 13.1 tok/s; GPU0 7501/8192 MiB; keine Xid, kein OOM.
   Übrig im Host-Speicher bleiben nur die nicht verschiebbaren Hilfspuffer: ~1 MiB Output-Puffer, 17–66 MiB CUDA_Host-Compute-Puffer
   und ~25 MiB CPU-Compute des mmproj (bei `LLAMA_ARG_MMPROJ_OFFLOAD=true`).
 - **Ollama 0.35.1:** Fork baut ohne Bonsai (`BONSAI=OFF`, neuer CI-Default; `OLLAMA_BONSAI`-Variable bzw. Dispatch-Input `bonsai`).
