@@ -19,7 +19,7 @@ class CompatibilityGuards(unittest.TestCase):
     def test_missing_upstream_files_fail_the_build(self):
         with tempfile.TemporaryDirectory() as root:
             for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn',
-                         'patch-llama-tier-fitting', 'patch-llama-jinja-tojson'):
+                         'patch-llama-input-gpu', 'patch-llama-tier-fitting', 'patch-llama-jinja-tojson'):
                 with self.subTest(patch=name):
                     result = subprocess.run([sys.executable, str(SCRIPTS / (name + '.py')), root],
                                             capture_output=True, timeout=10)
@@ -104,6 +104,26 @@ class CompatibilityGuards(unittest.TestCase):
             self.assertTrue(module.patch(path))
             self.assertEqual(path.read_text(), first)
             path.write_text('unrelated\n')
+            self.assertFalse(module.patch(path))
+
+    def test_input_gpu_patch_follows_layer_zero_keeps_opt_out_and_is_idempotent(self):
+        module = load('patch-llama-input-gpu')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'llama-model.cpp'
+            path.write_text(module.INCLUDE_OLD + 'int x;\n' + module.OLD)
+            self.assertTrue(module.patch(path))
+            first = path.read_text()
+            self.assertIn('#include <cstdlib>', first)
+            self.assertIn('pimpl->dev_input = get_layer_buft_list(0);', first)
+            self.assertIn('LLAMA_INPUT_LAYER_GPU', first)
+            # the upstream CPU placement stays reachable as the opt-out branch
+            self.assertIn('pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };', first)
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+            # fails closed when upstream moves the block or the include
+            path.write_text(module.INCLUDE_OLD + 'unrelated\n')
+            self.assertFalse(module.patch(path))
+            path.write_text('unrelated\n' + module.OLD)
             self.assertFalse(module.patch(path))
 
 

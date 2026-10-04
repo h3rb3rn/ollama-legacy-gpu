@@ -34,6 +34,24 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
   dann, die Geräte werden jetzt übersprungen statt blind geladen. Ein zweiter Durchlauf erkennt alle 4 RTX korrekt.
 - **Gap 4 (gelöst):** nicht der nextn-Layer, sondern ein Off-by-one: der Fit zählte den nextn-Slot nur mit `load_mtp`, der Lader
   immer → Trunk-Layer 0 blieb bei MTP-aus auf der CPU (`41/42`). `scripts/patch-llama-fit-nextn.py`; auf allen drei Hosts 42/42.
+- **Embedding-Tabelle in VRAM:** llama.cpp hält den Input-Layer (Token-Embedding, bei qwen3.6:35b 272.81 MiB Q4_K) fest auf
+  der CPU (`CUDA_Host`/`CPU_Mapped model buffer`). `scripts/patch-llama-input-gpu.py` legt ihn auf das Gerät von Layer 0;
+  die Auswahl läuft weiter über `select_weight_buft` (Gerät prüft `GET_ROWS`, sonst Fallback auf den nächsten Buffer-Typ).
+  Opt-out `LLAMA_INPUT_LAYER_GPU=0`. Warum nicht `LLAMA_ARG_OVERRIDE_TENSOR=token_embd.weight=CUDA0`: der Override umgeht diese
+  Prüfung und bricht auf N11-M10 mit `pre-allocated tensor (token_embd.weight) in a buffer (CUDA0) that cannot run the operation`
+  ab (llama.cpp b11232).
+  Empfehlung zusammen mit `LLAMA_ARG_FIT_TARGET=256` (MiB Reserve je GPU): mit dem Standard-Ziel lässt der Fit ca. 2 GiB je GPU frei
+  und lagert, sobald die 272 MiB Embedding in VRAM liegen, einen Experten-Tensor (210.82 MiB `ffn_down_exps`) auf den Host aus
+  (`CUDA_Host model buffer`, „N layers (M overflowing)“). Mit 256 MiB bleibt kein Gewichts-Puffer im Host-Speicher.
+  Hardware-Test (Image `ollama-gaps:input-gpu-test-20261004`, v0.35.1, CUDA 12.0.1, Archs 50;52;61;75;86, FA=ON, Batch 64, `qwen3.6:35b`,
+  Kontext 131072 vom Fit begrenzt, KV q4_0):
+  - N11-M10 (4× M10): 42/42, Gewichte 21.4 GiB komplett in VRAM; decode 9.0 → 9.5 tok/s, Laden 118 → 66 s;
+    11682-Token-Prompt: 633 s, Prefill 19.0 tok/s, decode 7.0 tok/s; GPU0 7840/8192 MiB; keine Xid, kein OOM.
+  - N04-RTX (2× RTX 2060 + 2× RTX 3060): 42/42, keine Gewichte im Host; decode 40.0 → 40.3 tok/s;
+    11682-Token-Prompt: 27 s, Prefill 498 tok/s, decode 37.5 tok/s; keine Xid, kein OOM.
+  - N02-M60: nicht getestet (Rollout wurde dort vom Auto-Mode-Classifier blockiert).
+  Übrig im Host-Speicher bleiben nur die nicht verschiebbaren Hilfspuffer: ~1 MiB Output-Puffer, 17–66 MiB CUDA_Host-Compute-Puffer
+  und ~25 MiB CPU-Compute des mmproj (bei `LLAMA_ARG_MMPROJ_OFFLOAD=true`).
 - **Ollama 0.35.1:** Fork baut ohne Bonsai (`BONSAI=OFF`, neuer CI-Default; `OLLAMA_BONSAI`-Variable bzw. Dispatch-Input `bonsai`).
   Bonsai bricht auf 0.35.1 beim Compat-Patch `002-clef.patch` (Prism-Baum) — Nachzug folgt.
 - **Tuning:** siehe `TUNING-2026-10-04.md` (Batch 512: Prefill ×1.75–2.1; MTP-Default 0 für alle Hosts).
