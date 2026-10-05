@@ -29,7 +29,7 @@ kept as history. See [the 0.35.0 fleet report](FLEET-ROLLOUT-0.35.0-2026-10-01.m
 | Variable | Effect |
 | --- | --- |
 | `OLLAMA_MAX_BATCH_SIZE` | batch size (stock computes its own and ignores it) |
-| `OLLAMA_DRAFT_NUM_PREDICT` | MTP draft length, `0` disables (default 0 via gpu-detect; avoids the Maxwell cuBLAS race) |
+| `OLLAMA_DRAFT_NUM_PREDICT` | server-wide default **and upper bound** for `draft_num_predict` (also caps the model manifest, e.g. the registry's `draft_num_predict 2`); a request value wins; `0` disables MTP (default 0 via gpu-detect; avoids the Maxwell cuBLAS race) |
 | `OLLAMA_UNSUPPORTED_GPU` | `mask` (default), `fail`, `ignore` for GPUs not in the image's `CUDA_ARCHS` |
 | `OLLAMA_ALLOW_UNKNOWN_CC` | explicitly allow unknown compute capabilities |
 | `GGML_CUDA_GRAPHS_LEGACY` | opt-in CUDA graphs on CC < 7.0 |

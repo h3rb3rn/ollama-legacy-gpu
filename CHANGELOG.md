@@ -69,10 +69,13 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
   vorher 260 MiB Host-Puffer = „1 % CPU“ auf N02-M60), N04-RTX bleibt bei 512 und läuft auf drei GPUs (2× RTX 2060 + 1× RTX 3060,
   eine 3060 für ComfyUI frei): 42.7 tok/s Decode, ~1050–1170 tok/s Prefill, 42/42 bei 262144 Kontext.
   Fleet-/Git-Lage: `docs/FLEET-STATE-2026-10-05.md`.
-- **Einschränkung zu Gap 2 (2026-10-05):** `OLLAMA_DRAFT_NUM_PREDICT=0` greift nur, wenn weder Modell noch Anfrage `draft_num_predict`
-  setzen. Das Registry-Manifest von `qwen3.6:35b` (Digest `a7eb95c53bcf`, 35,5B, NextN-Kopf) setzt `draft_num_predict 2` und
-  umgeht den serverweiten Default; die frühere Abnahme war mit einem lokal erstellten Tag ohne diesen Parameter erfolgt. Gap 2 ist
-  damit für frisch gezogene Registry-Modelle **nicht geschlossen** (Details in `docs/FLEET-STATE-2026-10-05.md`).
+- **Gap 2 jetzt auch für Registry-Modelle geschlossen (2026-10-05):** `OLLAMA_DRAFT_NUM_PREDICT` ist serverweiter Standard und
+  Obergrenze für Werte aus dem Modell-Manifest (`patch-ollama-mtp-default.py`, Go-Test `TestDraftNumPredictServerDefault`); Anfragen
+  mit eigenem Wert behalten Vorrang. Der frühere Stand ließ das Manifest-`draft_num_predict 2` des Registry-Modells `qwen3.6:35b`
+  (`a7eb95c53bcf`) durch. Abnahme auf N02-M60, N11-M10 und N04-RTX: Runner ohne `--spec-*`-Argumente. Image `gap2fix-20261005`.
+- **Modellstand:** alle drei Hosts auf dem aktuellen Registry-Modell `qwen3.6:35b` (35,5B, `a7eb95c53bcf`); die ältere 36,0B-Version
+  liegt als Tag auf N11-M10 und N04-RTX. Beobachtung: mit diesem Modell schaltet auf N11-M10 die Pipeline-Parallelität ein
+  (Host-Puffer 129,6 statt 32,8 MiB, kein Prefill-Gewinn).
 - **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 

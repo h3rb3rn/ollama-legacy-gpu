@@ -8,7 +8,7 @@ angegeben, wo sie belegt ist.
 Vorgaben des Users für die Instanzen: 256k-KV-Cache bei q4_0, **alles im VRAM und nichts im RAM**, `qwen3.6:35b` primär und warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live-Stand (Image `ollama-gaps:ctxfix-20261005`, Ollama 0.35.1)
+## Live-Stand (Image `ollama-gaps:gap2fix-20261005`, Ollama 0.35.1)
 
 | Einstellung | N04-RTX | N02-M60 (Pool GPU0–3) | N11-M10 |
 |---|---|---|---|
@@ -23,9 +23,9 @@ Vorgaben des Users für die Instanzen: 256k-KV-Cache bei q4_0, **alles im VRAM u
 | `OLLAMA_GPU_AUTODETECT` | 0 | **1** | 0 |
 | `GGML_CUDA_GRAPHS_LEGACY` | – | – | **1** |
 | Layer / wirksamer Kontext | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
-| Decode / Prefill (tok/s) | 42.7 / 1048–1170 | 14.3–14.6 / 86.5–87.1 | 9.0 / 23.9 |
-| nicht im VRAM laut `/api/ps` | 0 MiB (0,0 %) | 58 MiB (0,24 %) | 58 MiB (0,23 %) |
-| Host-Puffer `CUDA_Host compute` | 1029 MiB | 32,8 MiB | 32,8 MiB |
+| Decode / Prefill (tok/s), Modell `a7eb95c53bcf` | 42.2–42.4 / 1043–1156 | 14.2–15.3 / 86.4–87.0 | 9.2 / 24.1 |
+| nicht im VRAM laut `/api/ps` | 0 MiB (0,0 %) | 58 MiB (0,24 %) | 0 MiB (0,0 %) |
+| Host-Puffer `CUDA_Host compute` | 1029 MiB | 32,8 MiB | **129,6 MiB** (Pipeline-Parallelität) |
 
 Messwerte und Methode: [TUNING-2026-10-04.md](../TUNING-2026-10-04.md). Warum der Batch je Host verschieden ist: auf den 8-GiB-Hosts
 hinterließ Batch 512 einen gepinnten Host-Puffer von 260 MiB (angezeigt als „1 % CPU“); N04-RTX bleibt bei 512, dort zeigt
@@ -37,25 +37,36 @@ Zwei Abweichungen zwischen den Hosts, die Vergleiche verfälschen können:
 - **N11-M10 `GGML_CUDA_GRAPHS_LEGACY=1`:** Opt-in-CUDA-Graphs auf Maxwell (dort +35 % Decode gemessen, auf N02-M60 ohne Effekt).
   Die N11-Zahlen enthalten diesen Effekt, die N02-Zahlen nicht.
 
-## Modellversionen `qwen3.6:35b` (Befund vom 2026-10-05)
+## Modellversionen `qwen3.6:35b` und MTP-Schutz (Stand 2026-10-05, nachmittags)
 
-| Host | Digest | Parameter | Größe | Blöcke | NextN-Kopf | Manifest-Parameter |
-|---|---|---|---|---|---|---|
-| N11-M10, N04-RTX | `07d35212591f` | 36,0B (35 951 822 704) | 22,29 GiB | 40 | nein | – |
-| N02-M60 | `637d2bc25380` (Tag `qwen3.6:35b`) | 35,5B (35 505 251 456) | 21,07 GiB | 41 | ja (`blk.40.nextn.*`) | `draft_num_predict 0` |
-| Registry heute (Test-Pull auf N02-M60) | `a7eb95c53bcf` | 35,5B | 21,07 GiB | 41 | ja | **`draft_num_predict 2`** |
+Alle drei Hosts laufen jetzt mit dem **aktuellen Registry-Stand** `qwen3.6:35b` = Digest `a7eb95c53bcf` (35,5B Parameter,
+35 505 251 456, 21,07 GiB, 41 Blöcke, NextN-Kopf `blk.40.nextn.*`, Manifest `draft_num_predict 2`) und dem Image
+`ollama-gaps:gap2fix-20261005`. Vorher: N11-M10 und N04-RTX hatten den älteren Registry-Stand (`07d35212591f`, 36,0B, 22,29 GiB,
+40 Blöcke, ohne NextN-Kopf, lokal geladen 2026-06-08/10), N02-M60 die gleiche Modelldatei wie heute, aber mit lokal gesetztem
+`draft_num_predict 0` (`637d2bc25380`). Der Unterschied „35.5B“ gegenüber „36.0B“ im Dashboard war also kein lokaler Umbau, sondern
+ein älterer gegenüber dem aktuellen Registry-Stand.
 
-- Die 36,0B-Version auf N11-M10 und N04-RTX ist der ältere Registry-Stand (lokal geladen 2026-06-08/10). Die 35,5B-Version ist
-  der **aktuelle** Registry-Stand: dieselbe Modelldatei (`d372de8e…`) wie auf N02-M60, das Manifest unterscheidet sich nur im
-  Parameter `draft_num_predict` (Registry 2, N02-M60 lokal 0). Meine frühere Aussage, die N02-Variante sei durch das Neuerstellen
-  mit Modelfile entstanden, war falsch; neu war dort nur der Parameter.
-- Das 36,0B-Original ist über `ollama pull` nicht mehr zu bekommen; es existiert nur auf N11-M10 und N04-RTX.
-- **Folge für den MTP-Schutz:** Das Registry-Manifest setzt `draft_num_predict 2` ausdrücklich. Im Fork zählt ein im Modell
-  gesetzter Wert als ausdrücklich, deshalb gilt der serverweite Default `OLLAMA_DRAFT_NUM_PREDICT=0` für dieses Modell nicht. Ein
-  Test-Pull auf N02-M60 hat den Schutz ausgehebelt (Tag stand kurz auf dem Registry-Digest); er wurde aus dem Backup-Tag
-  `qwen3.6:35b-n02-nextn-20261003` sofort wiederhergestellt, es gab keine MTP-Aktivität und keinen CUDA-Fehler im Log.
-  Auf N11-M10 und N04-RTX liegt der ältere Stand ohne NextN-Kopf, dort greift das nicht; ein Pull der aktuellen Version würde dort
-  (auf N11-M10 mit Maxwell-Absturzrisiko) denselben Effekt haben.
+| Host | Sicherung der vorherigen Version | Befund nach dem Pull |
+|---|---|---|
+| N02-M60 | Tag `qwen3.6:35b-n02-nextn-20261003` (`637d2bc25380`, `draft_num_predict 0`) | läuft, 42/42, 14,2 / 15,3 tok/s, Prefill ~87 |
+| N11-M10 | Tag `qwen3.6:35b-36b-20260610` (`07d35212591f`, 36,0B; per `pull` nicht mehr zu bekommen) | läuft, 42/42, 9,2 / 9,2 tok/s, Prefill 24,1 |
+| N04-RTX | Tag `qwen3.6:35b-36b-20260608` (`07d35212591f`, 36,0B) | läuft, 42/42, 42,2 / 42,4 tok/s, Prefill 1043–1156 |
+
+**Gap 2 (MTP-Absturz auf Maxwell) ist damit auch für frisch gezogene Registry-Modelle geschlossen.** Das Registry-Manifest setzt
+`draft_num_predict 2` ausdrücklich; die frühere Version des Patches behandelte einen Manifest-Wert wie einen Anfragewert und ließ ihn
+durch (ein Test-Pull auf N02-M60 hatte den Schutz kurz ausgehebelt; Tag aus dem Backup wiederhergestellt, keine MTP-Aktivität, kein
+CUDA-Fehler). Jetzt begrenzt `OLLAMA_DRAFT_NUM_PREDICT` Manifest-Werte (0 = MTP aus), Anfragen mit eigenem Wert behalten Vorrang.
+Abnahme je Host: Modell leer geladen (ohne zu generieren), Runner-Kommandozeile **ohne** `--spec-*`-Argumente, danach Generierung ohne
+Fehler. Go-Test: `TestDraftNumPredictServerDefault`.
+
+**Pipeline-Parallelität und Host-Puffer.** llama.cpp schaltet bei mehreren GPUs im Layer-Split die Pipeline-Parallelität ein, wenn
+`n_gpu_layers > n_layer_all` gilt und keine Tensor-Overrides aktiv sind; sie vervierfacht die gepinnten Eingabepuffer
+(`sched copies = 4`). Gemessen mit dem neuen Modell bei Batch 64 auf N11-M10: Host-Puffer 129,6 statt 32,8 MiB, `RssShmem` 146 statt
+50 MiB, Compute-Puffer 648 statt 551 MiB je GPU, **ohne Prefill-Gewinn** (24,1 gegenüber 23,9 tok/s). Auf N02-M60 ist sie mit
+demselben Modell aus: dort aktiviert `OLLAMA_GPU_AUTODETECT=1` über `TIER_THRESHOLD=4` den Fit des Forks (22,7 s statt 0,9 s), der
+eine teilweise verteilte Schicht (`n_part=1`) und damit Tensor-Overrides erzeugt, und die schalten die Pipeline ab. Deshalb gilt:
+`OLLAMA_GPU_AUTODETECT=1` auf N02-M60 **nicht** auf 0 stellen, solange es keinen eigenen Schalter gegen die Pipeline gibt.
+N04-RTX läuft weiter mit Pipeline (Host-Puffer 1029 MiB bei Batch 512, von Ollama nicht als „CPU“ angezeigt).
 
 ## Wo die Konfiguration liegt
 
@@ -124,7 +135,7 @@ Ein Scan der Diffs und der Kandidaten-Dateien auf Muster wie `key`, `token`, `se
 ## Offene Entscheidungen für den User
 1. Welcher Klon ist kanonisch, und wie werden die Historien zusammengeführt und gepusht? Vorschlag der Parallel-Session:
    `origin/main` (`9077a63`) als Basis, N02 als Quelle seiner eigenen Commits. Bisher wurde nichts gemergt oder gepusht.
-2. `OLLAMA_GPU_AUTODETECT` auf N02-M60: bei 1 bleiben oder auf 0 zurück (dann N02 neu messen).
+2. `OLLAMA_GPU_AUTODETECT` auf N02-M60: bei 1 lassen (schaltet indirekt die Pipeline-Parallelität ab, siehe oben); bei einem eigenen Schalter gegen die Pipeline kann es auf 0.
 3. N11-Vorlagen `fork/compose/.env` und `.env.tesla` (N04-Design): übernehmen, korrigieren (132768?) oder verwerfen.
 4. Soll `llm-studio/worker-tesla/docker-compose.yml` versioniert werden (heute ausgeschlossen)?
 5. Backups per `.gitignore` ausnehmen? Den alten Klon `tesla/ollama-legacy-gpu/` auf N11-M10 archivieren (dann die `CLAUDE.md`
