@@ -1,0 +1,30 @@
+{
+ "tag": "A1",
+ "answers": {
+  "explain_de": {
+   "text": "Zunächst werden die Eingabetexte in numerische Vektoren umgewandelt, wobei sowohl die Token-Identität als auch ihre Position im Satz durch spezielle Embeddings kodiert werden. Diese Vektoren fließen dann durch mehrere Schichten des Modells, die primär auf dem Self-Attention-Mechanismus basieren, um globale Abhängigkeiten zwischen allen Wörtern im Kontext zu erfassen. Durch diesen Mechanismus kann das Modell für jedes Wort dynamisch gewichtete Informationen aus dem gesamten Eingabekontext aggregieren, anstatt sich nur auf vorherige oder nächste Tokens zu verlassen. Die daraus resultierenden kontextabhängigen Repräsentationen werden schließlich durch lineare Schichten geleitet, um eine Wahrscheinlichkeitsverteilung über den gesamten Wortschatz für das nächste Token zu berechnen. Dieser Prozess wird autoregressiv wiederholt, wobei jedes vorhergesagte Token als neue Eingabe dient, bis die Sequenz",
+   "prompt_tokens": 31
+  },
+  "code_py": {
+   "text": "```python\ndef merge_intervals(intervals):\n    \"\"\"Merge overlapping intervals.\n\n    Given a list of intervals, merge all overlapping intervals and return\n    the resulting non-overlapping intervals sorted by their start times.\n\n    Args:\n        intervals: A list of tuples, where each tuple represents an interval\n                   as (start, end).\n\n    Returns:\n        A list of merged intervals as tuples (start, end).\n\n    Examples:\n        >>> merge_intervals([(1, 3), (2, 6), (8, 10), (15, 18)])\n        [(1, 6), (8, 10), (15, 18)]\n        >>> merge_intervals([(1, 4), (4, 5)])\n        [(1, 5)]\n    \"\"\"\n    if not intervals:\n        return []\n\n    # Sort intervals by start time\n    sorted_intervals = sorted",
+   "prompt_tokens": 40
+  },
+  "math_de": {
+   "text": "Um den Ausdruck $17 \\cdot 23 + 144 / 12$ zu berechnen, beachten wir die mathematische Regel „Punktrechnung vor Strichrechnung“ (Multiplikation und Division werden vor Addition und Subtraktion ausgeführt).\n\nHier ist die schrittweise Berechnung:\n\n**Schritt 1: Multiplikation durchführen**\nBerechne $17 \\cdot 23$:\n$$\n\\begin{align*}\n17 \\cdot 23 &= 17 \\cdot (20 + 3) \\\\\n&= 17 \\cdot 20 + 17 \\cdot 3 \\\\\n&= 340 + 51 \\\\\n&= 391\n\\end{align*}\n$$\n\n**Schritt 2: Division durchführen**\nBerechne $144 / 12$:",
+   "prompt_tokens": 42
+  },
+  "translate": {
+   "text": "The server starts the model, distributes its layers across the GPUs, and then responds to each request within a few seconds.",
+   "prompt_tokens": 42
+  },
+  "json_extract": {
+   "text": "```json\n{\n  \"name\": \"Anna Berger\",\n  \"city\": \"Leipzig\",\n  \"year\": 2019\n}\n```",
+   "prompt_tokens": 41
+  },
+  "needle_25k": {
+   "text": "BLAUER-FALKE-4711",
+   "prompt_tokens": 18044,
+   "found": true
+  }
+ }
+}

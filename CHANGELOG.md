@@ -44,7 +44,7 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
   und lagert, sobald die 272 MiB Embedding in VRAM liegen, einen Experten-Tensor (210.82 MiB `ffn_down_exps`) auf den Host aus
   (`CUDA_Host model buffer`, „N layers (M overflowing)“). Mit 256 MiB bleibt kein Gewichts-Puffer im Host-Speicher.
   Hardware-Test (Image `ollama-gaps:input-gpu-test-20261004`, v0.35.1, CUDA 12.0.1, Archs 50;52;61;75;86, FA=ON, Batch 64, `qwen3.6:35b`,
-  Kontext 131072 vom Fit begrenzt, KV q4_0):
+  Kontext 131072 [Korrektur: nicht vom Fit, sondern vom Dynamic-Pool-Patch halbiert, siehe unten], KV q4_0):
   - N11-M10 (4× M10): 42/42, Gewichte 21.4 GiB komplett in VRAM; decode 9.0 → 9.5 tok/s, Laden 118 → 66 s;
     11682-Token-Prompt: 633 s, Prefill 19.0 tok/s, decode 7.0 tok/s; GPU0 7840/8192 MiB; keine Xid, kein OOM.
   - N04-RTX (2× RTX 2060 + 2× RTX 3060): 42/42, keine Gewichte im Host; decode 40.0 → 40.3 tok/s;
@@ -59,6 +59,9 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
 - **Kontext-Halbierung behoben:** `patch-ollama-dynamic-pool.py` halbierte `-c` bei jedem gesetzten `OLLAMA_MAX_BATCH_SIZE`
   (262144 → 131072). Jetzt nur noch bei ausdrücklich deaktivierter Flash Attention. N04-RTX bestätigt: `-c 262144`, 42/42,
   40.5 tok/s Decode, ~640 tok/s Prefill bei Batch 64. Frühere Fork-Messungen liefen mit 131072 (siehe TUNING-Doku).
+- **Batch 64 vs. 512 (2026-10-05):** Qualität in 6/6 Prompts identisch inkl. Needle bei 18k Token (N04-RTX); Prefill ×1.7–2.1;
+  Kosten ~0.27 GB Host-RAM (Attention-Maske, `n_ctx×n_ubatch×2`). Prompt-Längen aus den Logs: Median 210, p90 28 885, Max 181 904 Token.
+  Daten: `TUNING-2026-10-04.md`, `docs/evidence/batch-quality-2026-10-05/`.
 - **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 

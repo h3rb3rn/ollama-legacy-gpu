@@ -37,6 +37,13 @@ A/B-Test von Fork und Stock mit Batch 64 auf N04-RTX. Stock ignoriert
 `OLLAMA_MAX_BATCH_SIZE` und rechnet selbst (2048). Ein früherer Stock-Stall
 ließ sich nicht reproduzieren; seine Ursache ist ungeklärt.
 
+## Korrektur 2026-10-05: Kontext war nicht „vom Fit begrenzt“
+Der in diesem Bericht gemessene Kontext von 131072 (statt konfigurierter 262144) kam nicht aus dem Fit, sondern aus
+`patch-ollama-dynamic-pool.py`: Der Block „gallocr compute buffer reduction“ halbierte `-c` bei **jedem** gesetzten
+`OLLAMA_MAX_BATCH_SIZE`. Behoben in Commit `49e786d` (Halbierung nur noch bei ausdrücklich abgeschalteter Flash Attention).
+Mit dem Image `ollama-gaps:ctxfix-20261005` laufen N04-RTX, N11-M10 und N02-M60 bei 262144 (Runner `-c 262144`), alle 42/42;
+Zahlen: `TUNING-2026-10-04.md`. Die Werte oben gelten für den dort angegebenen Kontext 131072.
+
 ## Unit-Tests
 
 `python3 -m unittest discover -s tests -v` im Worktree. Neu:

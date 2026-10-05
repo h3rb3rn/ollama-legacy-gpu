@@ -7,8 +7,10 @@ and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2
 **Status, 2026-10-05:** the build is based on **Ollama v0.35.1** (llama.cpp
 b11232) with `BONSAI=OFF` by default. The newest patch keeps the token embedding
 table in VRAM (`patch-llama-input-gpu.py`); with `LLAMA_ARG_FIT_TARGET=256`
-`qwen3.6:35b` (ctx 131072, KV q4_0, batch 64) runs **42/42 layers with no weight
-buffer on the host** on N11-M10, N04-RTX (:11434) and N02-M60. N04-RTX :11435
+`qwen3.6:35b` (ctx 262144, KV q4_0, batch 64 or 512) runs **42/42 layers with no weight
+buffer on the host** on N11-M10, N04-RTX (:11434) and N02-M60. (Earlier reports
+state ctx 131072: that was a bug in the dynamic-pool patch, which halved `-c` whenever
+`OLLAMA_MAX_BATCH_SIZE` was set; fixed in `49e786d`.) N04-RTX :11435
 runs stock for comparison. Only the `cuda12-maxwell` image was built and run for
 this test; `cuda11-legacy` and `cuda13-rtx` carry the patch untested.
 
@@ -32,6 +34,28 @@ kept as history. See [the 0.35.0 fleet report](FLEET-ROLLOUT-0.35.0-2026-10-01.m
 | `GGML_CUDA_GRAPHS_LEGACY` | opt-in CUDA graphs on CC < 7.0 |
 | `LLAMA_INPUT_LAYER_GPU` | `0` restores upstream CPU placement of the embedding |
 | `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` recommended here) |
+
+### Batch size: what it changes (measured 2026-10-05, ctx 262144, `ctxfix-20261005`)
+
+`OLLAMA_MAX_BATCH_SIZE` / `LLAMA_ARG_BATCH` / `LLAMA_ARG_UBATCH` only take effect in this fork;
+stock Ollama ignores them and picks its own (measured `-b 2048`). The effective value is the one in the
+runner log (`llama_context: n_batch`), not the env file. `scripts/bench-throughput.sh` prints it next to
+each measurement.
+
+| Host | Batch | Decode tok/s | Prefill tok/s | Host buffer (`CUDA_Host compute`) |
+| --- | --- | --- | --- | --- |
+| N04-RTX (4× RTX) | 64 / 512 | 40.5 / 40.4 | 624–651 / 1021–1175 | 1029 MiB at 512 |
+| N02-M60 (4× M60) | 64 / 512 | 14.2–14.8 / 12.6–13.5 | 87 / 150–155 | 260 MiB at 512 |
+| N11-M10 (4× M10) | 64 / 512 | 9.1 / 9.1–9.2 | 24 / 49 | 260 MiB at 512 |
+
+- **Performance:** larger batch speeds up the *prompt* phase (×1.7–2.1); token generation is unchanged.
+  It matters for long prompts: of 756 requests seen in N04-RTX logs, 21 % had ≥ 4096 and 7 % ≥ 32768 tokens,
+  while 40 % had < 64 tokens (no difference there).
+- **Quality:** on N04-RTX, 6/6 greedy answers (incl. a 18k-token needle test) were identical at batch 64 and 512,
+  and identical between two runs at 512. Not verified on Maxwell.
+- **Cost:** batch 512 needs ~0.27 GB pinned host RAM at ctx 262144 (`n_ctx × n_ubatch × 2 B`; ~0.03 GB at 64)
+  and 0.1–0.5 GiB more VRAM per GPU; on 8 GiB cards only ~0.3 GiB VRAM stays free.
+  Weights themselves are 100 % in VRAM. Details and limits: [TUNING-2026-10-04.md](TUNING-2026-10-04.md).
 
 ## GPU compatibility
 

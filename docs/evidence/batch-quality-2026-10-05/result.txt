@@ -1,0 +1,53 @@
+ Container ollama Started 
+### run A1 (env batch 512)
+explain_de: 905 chars
+code_py: 715 chars
+math_de: 491 chars
+translate: 124 chars
+json_extract: 76 chars
+needle_25k: prompt_tokens=18044 found=True
+effective: -c 262144 -b 512 -ub 512
+ Container ollama Started 
+### run B (env batch 64)
+explain_de: 905 chars
+code_py: 715 chars
+math_de: 491 chars
+translate: 124 chars
+json_extract: 76 chars
+needle_25k: prompt_tokens=18044 found=True
+effective: -c 262144 -b 64 -ub 64
+ Container ollama Started 
+### run A2 (env batch 512)
+explain_de: 905 chars
+code_py: 715 chars
+math_de: 491 chars
+translate: 124 chars
+json_extract: 76 chars
+needle_25k: prompt_tokens=18044 found=True
+effective: -c 262144 -b 512 -ub 512
+### A1 vs A2 (noise floor, both 512)
+explain_de    identisch
+code_py       identisch
+math_de       identisch
+translate     identisch
+json_extract  identisch
+needle_25k    identisch needle: True vs True
+identisch: 6/6
+### B(64) vs A1(512)
+explain_de    identisch
+code_py       identisch
+math_de       identisch
+translate     identisch
+json_extract  identisch
+needle_25k    identisch needle: True vs True
+identisch: 6/6
+### B(64) vs A2(512)
+explain_de    identisch
+code_py       identisch
+math_de       identisch
+translate     identisch
+json_extract  identisch
+needle_25k    identisch needle: True vs True
+identisch: 6/6
+
+[exited with code 0]
