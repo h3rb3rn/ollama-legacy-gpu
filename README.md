@@ -4,14 +4,34 @@ Ollama runtime and Docker builds for NVIDIA legacy and current GPUs, including
 native integration of the [Prism Bonsai demo](https://github.com/PrismML-Eng/Bonsai-demo)
 and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf).
 
-**Verified status, 2026-10-01:** all 14 fleet instances report Ollama 0.35.0.
-Twelve Tesla services run the fork with **Q4 KV + Flash Attention by default**;
-N04 ports 11434/11435 retain official Stock.
-CUDA12 Bonsai PQ2_0 inference passed on M10 (Q8, 190k) and M60 (Q4, 190k;
-Q8, 131k). Original production GPU assignments and shared model pools remain.
-CUDA11 has compiled successfully but remains **untested on GPU hardware**.
-RTX performance results below refer to the earlier 0.34.1 fork qualification.
-See [the final fleet report](FLEET-ROLLOUT-0.35.0-2026-10-01.md).
+**Status, 2026-10-05:** the build is based on **Ollama v0.35.1** (llama.cpp
+b11232) with `BONSAI=OFF` by default. The newest patch keeps the token embedding
+table in VRAM (`patch-llama-input-gpu.py`); with `LLAMA_ARG_FIT_TARGET=256`
+`qwen3.6:35b` (ctx 131072, KV q4_0, batch 64) runs **42/42 layers with no weight
+buffer on the host** on N11-M10, N04-RTX (:11434) and N02-M60. N04-RTX :11435
+runs stock for comparison. Only the `cuda12-maxwell` image was built and run for
+this test; `cuda11-legacy` and `cuda13-rtx` carry the patch untested.
+
+- [What the fork does differently from stock](docs/FORK-VS-STOCK.md) – patches,
+  scripts, per-image patch matrix and environment variables.
+- [Test report 2026-10-04](docs/TEST-REPORT-2026-10-04.md) – results with all
+  settings used, and the limitations.
+- [CHANGELOG](CHANGELOG.md).
+
+Older results below (Bonsai, 0.35.0 fleet rollout, 0.34.1 RTX qualification) are
+kept as history. See [the 0.35.0 fleet report](FLEET-ROLLOUT-0.35.0-2026-10-01.md).
+
+### Fork-specific environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `OLLAMA_MAX_BATCH_SIZE` | batch size (stock computes its own and ignores it) |
+| `OLLAMA_DRAFT_NUM_PREDICT` | MTP draft length, `0` disables (default 0 via gpu-detect; avoids the Maxwell cuBLAS race) |
+| `OLLAMA_UNSUPPORTED_GPU` | `mask` (default), `fail`, `ignore` for GPUs not in the image's `CUDA_ARCHS` |
+| `OLLAMA_ALLOW_UNKNOWN_CC` | explicitly allow unknown compute capabilities |
+| `GGML_CUDA_GRAPHS_LEGACY` | opt-in CUDA graphs on CC < 7.0 |
+| `LLAMA_INPUT_LAYER_GPU` | `0` restores upstream CPU placement of the embedding |
+| `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` recommended here) |
 
 ## GPU compatibility
 
