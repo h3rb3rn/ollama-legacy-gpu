@@ -18,7 +18,7 @@ def load(name):
 class CompatibilityGuards(unittest.TestCase):
     def test_missing_upstream_files_fail_the_build(self):
         with tempfile.TemporaryDirectory() as root:
-            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn',
+            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn', 'patch-llama-pipeline-parallel',
                          'patch-llama-input-gpu', 'patch-llama-tier-fitting', 'patch-llama-jinja-tojson'):
                 with self.subTest(patch=name):
                     result = subprocess.run([sys.executable, str(SCRIPTS / (name + '.py')), root],
@@ -145,6 +145,21 @@ class CompatibilityGuards(unittest.TestCase):
         self.assertLess(cond, halving)
         self.assertLess(halving, cap)
         self.assertEqual(code.count('{'), code.count('}'))
+
+    def test_pipeline_parallel_opt_out_is_idempotent_and_default_unchanged(self):
+        module = load('patch-llama-pipeline-parallel')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'llama-context.cpp'
+            path.write_text(module.OLD + '            model.n_gpu_layers() > model.hparams.n_layer_all;\n')
+            self.assertTrue(module.patch(path))
+            first = path.read_text()
+            self.assertIn('getenv("LLAMA_PIPELINE_PARALLEL")', first)
+            # without the variable the original condition still applies: the new term only adds an AND
+            self.assertIn('llama_pp_allowed &&\n            model.n_devices() > 1 &&', first)
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+            path.write_text('unrelated\n')
+            self.assertFalse(module.patch(path))
 
 
 if __name__ == '__main__':

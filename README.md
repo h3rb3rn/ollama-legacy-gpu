@@ -33,6 +33,7 @@ kept as history. See [the 0.35.0 fleet report](FLEET-ROLLOUT-0.35.0-2026-10-01.m
 | `OLLAMA_UNSUPPORTED_GPU` | `mask` (default), `fail`, `ignore` for GPUs not in the image's `CUDA_ARCHS` |
 | `OLLAMA_ALLOW_UNKNOWN_CC` | explicitly allow unknown compute capabilities |
 | `GGML_CUDA_GRAPHS_LEGACY` | opt-in CUDA graphs on CC < 7.0 |
+| `LLAMA_PIPELINE_PARALLEL` | `0` disables llama.cpp pipeline parallelism (multi-GPU layer split): saves pinned host RAM (x4 input buffers) and ~100 MiB VRAM per GPU; no gain on Maxwell, but +7 % decode / ~+20 % prefill on the RTX pool |
 | `LLAMA_INPUT_LAYER_GPU` | `0` restores upstream CPU placement of the embedding |
 | `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` needed so no expert tensor (`ffn_down_exps`, ~211 MiB) spills to the host) |
 

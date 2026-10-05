@@ -76,6 +76,9 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
 - **Modellstand:** alle drei Hosts auf dem aktuellen Registry-Modell `qwen3.6:35b` (35,5B, `a7eb95c53bcf`); die ältere 36,0B-Version
   liegt als Tag auf N11-M10 und N04-RTX. Beobachtung: mit diesem Modell schaltet auf N11-M10 die Pipeline-Parallelität ein
   (Host-Puffer 129,6 statt 32,8 MiB, kein Prefill-Gewinn).
+- **`LLAMA_PIPELINE_PARALLEL=0` (2026-10-05):** neuer Opt-out gegen die Pipeline-Parallelität (`patch-llama-pipeline-parallel.py`, ohne
+  Variable unverändert). N11-M10 und N02-M60: aus (Host-Puffer 32,8 MiB statt 129,6 MiB, kein Leistungsverlust); N04-RTX bleibt an
+  (+7 % Decode, ~+20 % Prefill gegen 770 MiB mehr Host-Puffer). Image `pipefix-20261005`.
 - **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 

@@ -77,6 +77,7 @@ RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERS
 COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
 COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
 COPY scripts/patch-llama-fit-nextn.py     /tmp/patch-llama-fit-nextn.py
+COPY scripts/patch-llama-pipeline-parallel.py /tmp/patch-llama-pipeline-parallel.py
 COPY scripts/patch-llama-input-gpu.py    /tmp/patch-llama-input-gpu.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
@@ -160,6 +161,8 @@ RUN if [ "${BONSAI}" = ON ]; then \
 RUN python3 /tmp/patch-llama-tier-fitting.py /src
 # Gap 4: count the nextn slot in the fit even with MTP off (else trunk layer 0 lands on the CPU)
 RUN python3 /tmp/patch-llama-fit-nextn.py /src
+# LLAMA_PIPELINE_PARALLEL=0 opt-out: pipeline parallelism quadruples the pinned host buffer (no gain on our pools)
+RUN python3 /tmp/patch-llama-pipeline-parallel.py /src
 # Input layer (token embedding) in VRAM instead of host memory; opt out with LLAMA_INPUT_LAYER_GPU=0
 RUN python3 /tmp/patch-llama-input-gpu.py /src
 RUN python3 /tmp/patch-llama-jinja-tojson.py /src

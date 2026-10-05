@@ -8,7 +8,7 @@ angegeben, wo sie belegt ist.
 Vorgaben des Users für die Instanzen: 256k-KV-Cache bei q4_0, **alles im VRAM und nichts im RAM**, `qwen3.6:35b` primär und warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live-Stand (Image `ollama-gaps:gap2fix-20261005`, Ollama 0.35.1)
+## Live-Stand (Image `ollama-gaps:pipefix-20261005`, Ollama 0.35.1)
 
 | Einstellung | N04-RTX | N02-M60 (Pool GPU0–3) | N11-M10 |
 |---|---|---|---|
@@ -22,10 +22,11 @@ Vorgaben des Users für die Instanzen: 256k-KV-Cache bei q4_0, **alles im VRAM u
 | `OLLAMA_DRAFT_NUM_PREDICT` | 0 | 0 | 0 |
 | `OLLAMA_GPU_AUTODETECT` | 0 | **1** | 0 |
 | `GGML_CUDA_GRAPHS_LEGACY` | – | – | **1** |
+| `LLAMA_PIPELINE_PARALLEL` | nicht gesetzt (Pipeline an) | **0** | **0** |
 | Layer / wirksamer Kontext | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
-| Decode / Prefill (tok/s), Modell `a7eb95c53bcf` | 42.2–42.4 / 1043–1156 | 14.2–15.3 / 86.4–87.0 | 9.2 / 24.1 |
-| nicht im VRAM laut `/api/ps` | 0 MiB (0,0 %) | 58 MiB (0,24 %) | 0 MiB (0,0 %) |
-| Host-Puffer `CUDA_Host compute` | 1029 MiB | 32,8 MiB | **129,6 MiB** (Pipeline-Parallelität) |
+| Decode / Prefill (tok/s), Modell `a7eb95c53bcf` | 42.3 / 1140–1172 | 15.0–16.0 / 91–93 | 9.3 / 24.2 |
+| nicht im VRAM laut `/api/ps` | 0 MiB (0,0 %) | 0 MiB (0,0 %) | 0 MiB (0,0 %) |
+| Host-Puffer `CUDA_Host compute` | 1029 MiB (Pipeline an) | 32,8 MiB | 32,8 MiB |
 
 Messwerte und Methode: [TUNING-2026-10-04.md](../TUNING-2026-10-04.md). Warum der Batch je Host verschieden ist: auf den 8-GiB-Hosts
 hinterließ Batch 512 einen gepinnten Host-Puffer von 260 MiB (angezeigt als „1 % CPU“); N04-RTX bleibt bei 512, dort zeigt
@@ -61,12 +62,23 @@ Fehler. Go-Test: `TestDraftNumPredictServerDefault`.
 
 **Pipeline-Parallelität und Host-Puffer.** llama.cpp schaltet bei mehreren GPUs im Layer-Split die Pipeline-Parallelität ein, wenn
 `n_gpu_layers > n_layer_all` gilt und keine Tensor-Overrides aktiv sind; sie vervierfacht die gepinnten Eingabepuffer
-(`sched copies = 4`). Gemessen mit dem neuen Modell bei Batch 64 auf N11-M10: Host-Puffer 129,6 statt 32,8 MiB, `RssShmem` 146 statt
-50 MiB, Compute-Puffer 648 statt 551 MiB je GPU, **ohne Prefill-Gewinn** (24,1 gegenüber 23,9 tok/s). Auf N02-M60 ist sie mit
-demselben Modell aus: dort aktiviert `OLLAMA_GPU_AUTODETECT=1` über `TIER_THRESHOLD=4` den Fit des Forks (22,7 s statt 0,9 s), der
-eine teilweise verteilte Schicht (`n_part=1`) und damit Tensor-Overrides erzeugt, und die schalten die Pipeline ab. Deshalb gilt:
-`OLLAMA_GPU_AUTODETECT=1` auf N02-M60 **nicht** auf 0 stellen, solange es keinen eigenen Schalter gegen die Pipeline gibt.
-N04-RTX läuft weiter mit Pipeline (Host-Puffer 1029 MiB bei Batch 512, von Ollama nicht als „CPU“ angezeigt).
+(`sched copies = 4`). Neuer Schalter `LLAMA_PIPELINE_PARALLEL=0` (`patch-llama-pipeline-parallel.py`, ohne Variable unverändert).
+Gemessen mit dem aktuellen Modell:
+
+| Host | Pipeline | Host-Puffer | Compute-Puffer je GPU | Decode tok/s | Prefill tok/s |
+|---|---|---|---|---|---|
+| N11-M10 (Batch 64) | an | 129,6 MiB (`RssShmem` 146 MiB) | 648 MiB | 9.2 / 9.2 | 24.1 |
+| | **aus** | **32,8 MiB** (`RssShmem` 47 MiB) | 551 MiB | 9.3 / 9.3 | 24.2 / 24.1 |
+| N02-M60 (Batch 64) | aus (vorher indirekt durch Autodetect) | 32,8 MiB | ~551 MiB | 15.0 / 16.0 | 91.4 / 92.9 |
+| N04-RTX (Batch 512, 3 GPUs) | **an** | 1029 MiB | ~1,6 GiB | 42.3 / 41.6 (und 42.2 / 42.4) | 1140 / 1172 (und 1043 / 1156) |
+| | aus | 260,3 MiB | 822 MiB | 38.3–39.7 (Mittel 39.3) | 917–932 (Mittel 922) |
+
+Auf Maxwell (N11-M10) bringt die Pipeline keinen Vorteil und kostet ~97 MiB gepinnten RAM: dort aus. Auf N04-RTX bringt sie +7 % Decode
+und rund +20 % Prefill gegen 770 MiB mehr Host-Puffer: dort bleibt sie an (Entscheidung des Users zu „100 % GPU“ in der Anzeige; mit
+`LLAMA_PIPELINE_PARALLEL=0` wären es 260 statt 1029 MiB). Die erste N04-Messung ohne Pipeline war durch ComfyUI-Aktivität auf dem
+Host gestört (zweiter Lauf 23 tok/s) und wurde bei ruhigem Host wiederholt (siehe Tabelle).
+Auf N02-M60 war die Pipeline mit `OLLAMA_GPU_AUTODETECT=1` schon vorher indirekt aus (Tensor-Overrides durch den Fit des Forks,
+22,7 s Fit-Dauer); jetzt ist sie ausdrücklich aus. Damit lässt sich `OLLAMA_GPU_AUTODETECT` auf N02-M60 bei Bedarf auf 0 stellen.
 
 ## Wo die Konfiguration liegt
 
@@ -135,7 +147,7 @@ Ein Scan der Diffs und der Kandidaten-Dateien auf Muster wie `key`, `token`, `se
 ## Offene Entscheidungen für den User
 1. Welcher Klon ist kanonisch, und wie werden die Historien zusammengeführt und gepusht? Vorschlag der Parallel-Session:
    `origin/main` (`9077a63`) als Basis, N02 als Quelle seiner eigenen Commits. Bisher wurde nichts gemergt oder gepusht.
-2. `OLLAMA_GPU_AUTODETECT` auf N02-M60: bei 1 lassen (schaltet indirekt die Pipeline-Parallelität ab, siehe oben); bei einem eigenen Schalter gegen die Pipeline kann es auf 0.
+2. `OLLAMA_GPU_AUTODETECT` auf N02-M60: kann jetzt auf 0 (die Pipeline ist ausdrücklich aus); danach N02-M60 neu messen.
 3. N11-Vorlagen `fork/compose/.env` und `.env.tesla` (N04-Design): übernehmen, korrigieren (132768?) oder verwerfen.
 4. Soll `llm-studio/worker-tesla/docker-compose.yml` versioniert werden (heute ausgeschlossen)?
 5. Backups per `.gitignore` ausnehmen? Den alten Klon `tesla/ollama-legacy-gpu/` auf N11-M10 archivieren (dann die `CLAUDE.md`
