@@ -11,9 +11,11 @@ pass or candidate build as hardware qualification or a deployed release.
 
 1. The weekly upstream check detects a published Ollama release. Failed
    attempts remain retryable because detection does not update the version file.
-2. Build candidates from that Ollama version for CUDA 11, 12 and 13, with
-   `BONSAI=ON`. Applying the GGUF/native compatibility patches, GGUF tests and
-   compilation must all succeed. An incompatible upstream release stops here.
+2. Build candidates from that Ollama version for CUDA 11, 12 and 13. `BONSAI`
+   defaults to `OFF`; with the repository variable `OLLAMA_BONSAI=ON` (or the
+   dispatch input `bonsai`) the Bonsai compatibility patches and GGUF tests run as well.
+   Applying the patches and compilation must all succeed. An incompatible upstream
+   release stops here.
 3. Run Bonsai plus a separate ordinary GGUF model on real K80, M10, M60 and
    RTX hardware. Maxwell and RTX must pass Q8_0 and Q4_0 tests; K80 uses F16.
    Evidence names the immutable image digest and actual hardware UUIDs.

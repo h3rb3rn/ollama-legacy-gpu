@@ -14,11 +14,13 @@ einmal gefunden wird.
 | GPU-Ziele | nur aktuelle Compute Capabilities | zusätzlich CC 5.0/5.2/6.x/7.0 (Maxwell, Pascal, Volta) per CUDA 12 / 11 |
 | Flash Attention | global an/aus nach Erkennung | pro Tier: nur wenn alle beteiligten GPUs es können |
 | GPU-Auswahl | Ollama-Scheduler | dynamischer Pool (schnelle GPUs zuerst, Legacy-GPUs nur bei Bedarf) |
-| Batchgröße | intern berechnet (z. B. 2048), `OLLAMA_MAX_BATCH_SIZE` wirkungslos | `OLLAMA_MAX_BATCH_SIZE` wird ausgewertet |
+| Batchgröße | intern berechnet (gemessen `-b 2048`), `OLLAMA_MAX_BATCH_SIZE` wirkungslos | `OLLAMA_MAX_BATCH_SIZE` wird ausgewertet |
+| Kontext | wie konfiguriert | wie konfiguriert (die Kontext-Halbierung des Pool-Patches gilt nur bei ausdrücklich abgeschalteter Flash Attention) |
 | Unbekannte GPU / CC | kein Abgleich mit den Build-Zielen des Images | Abgleich mit `CUDA_ARCHS`; Default `mask`, `fail`/`ignore` wählbar |
-| MTP-Draft (qwen35moe) | automatisch an, stürzt auf Maxwell ab (cuBLAS-Race) | per `OLLAMA_DRAFT_NUM_PREDICT` steuerbar, Maxwell-Default 0 |
+| MTP-Draft (qwen35moe) | per Modell-Manifest an (`draft_num_predict 2`), stürzt auf Maxwell ab (cuBLAS-Race) | `OLLAMA_DRAFT_NUM_PREDICT` ist Standard und Obergrenze auch für Manifest-Werte; Default 0 |
 | Embedding-Tabelle (`token_embd`) | immer im Host-RAM | folgt Layer 0 in den VRAM |
-| Fit (nextn-Layer) | Off-by-one, ein Layer wird falsch zugeordnet | korrigiert |
+| Fit (nextn-Slot) | zählt den Slot nur mit geladenem MTP; bei MTP aus bleibt Layer 0 auf der CPU (`41/42`) | zählt ihn immer mit (`42/42`) |
+| Pipeline-Parallelität (Multi-GPU) | automatisch, vierfache Eingabepuffer im Host-RAM | per `LLAMA_PIPELINE_PARALLEL=0` abschaltbar |
 | CUDA Graphs | auf Legacy-GPUs deaktiviert | per `GGML_CUDA_GRAPHS_LEGACY=1` zuschaltbar |
 | Jinja `tojson` | Template-Fehler bei einigen Modellen | kompatibel |
 
@@ -29,22 +31,28 @@ Go (Ollama):
 - `patch-ollama-fa.py` – tier-bewusste Flash-Attention-Entscheidung.
 - `patch-ollama-dynamic-pool.py` – `selectGPUPool`: Modell läuft auf dem
   schnellen Pool, wenn es in dessen VRAM passt (Schwelle 75 %), sonst auf allen.
+  Die Halbierung von `-c` und `-np` bei gesetztem `OLLAMA_MAX_BATCH_SIZE` gilt
+  nur, wenn Flash Attention ausdrücklich aus ist.
 - `patch-ollama-batch.py` – `OLLAMA_MAX_BATCH_SIZE`.
 - `patch-ollama-discovery.py` – Compute Capability nach CUDA-Index, fail closed;
   `OLLAMA_ALLOW_UNKNOWN_CC` erlaubt unbekannte Karten explizit.
-- `patch-ollama-mtp-default.py` – `OLLAMA_DRAFT_NUM_PREDICT`; ein explizit
-  gesetzter Request-Wert hat Vorrang.
+- `patch-ollama-mtp-default.py` – `OLLAMA_DRAFT_NUM_PREDICT`: Wert aus der
+  Anfrage gewinnt; ein Wert aus dem Modell-Manifest wird auf die Variable begrenzt
+  (0 = MTP aus); ohne beides gilt die Variable als Standard. Test:
+  `TestDraftNumPredictServerDefault`.
 
 llama.cpp:
 
 - `patch-llama-tier-fitting.py` – Fitting über gemischte GPU-Tiers, Split-Buffer entfernt.
-- `patch-llama-fit-nextn.py` – zählt den nextn-Slot im Fit immer mit (Fix in 676a3b2).
-- `patch-llama-input-gpu.py` – **neu:** `llama_model::load_tensors` legt die
+- `patch-llama-fit-nextn.py` – zählt den nextn-Slot im Fit immer mit.
+- `patch-llama-input-gpu.py` – `llama_model::load_tensors` legt die
   Eingabeschicht (Token-Embedding) auf das Gerät von Layer 0.
   `LLAMA_INPUT_LAYER_GPU=0` stellt die Upstream-Platzierung wieder her.
   Die Platzierung läuft weiter über `select_weight_buft` (mit CPU-Fallback).
   `LLAMA_ARG_OVERRIDE_TENSOR=token_embd.weight=CUDA0` umgeht diese Prüfung und
   bricht den Scheduler ab (N11-M10, b11232).
+- `patch-llama-pipeline-parallel.py` – `LLAMA_PIPELINE_PARALLEL=0` überspringt
+  die Pipeline-Parallelität; ohne Variable unverändert.
 - `patch-llama-jinja-tojson.py` – `tojson`-Kompatibilität.
 - `patch-llama-cuda-graphs-legacy.py` – Opt-in für CUDA Graphs auf CC < 7.0.
 
@@ -52,7 +60,7 @@ llama.cpp:
 
 | Patch | cuda11-legacy | cuda12-maxwell | cuda13-rtx |
 | --- | --- | --- | --- |
-| tier-fitting, fit-nextn, input-gpu, jinja-tojson | ja | ja | ja |
+| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, jinja-tojson | ja | ja | ja |
 | fa, dynamic-pool, batch | ja | ja | ja |
 | discovery, mtp-default | nein | ja | ja |
 | cuda-graphs-legacy | nein | ja | nein |
@@ -67,21 +75,28 @@ llama.cpp:
   `inject-presets.py` – Start, Tuning, Proxy und Presets
   (`presets/gpu-targets.json`).
 
+## Messwerkzeuge (im Repo)
+
+- `scripts/bench-throughput.sh` – Decode und Prefill mit den **wirksamen** Werten aus dem
+  Runner-Log (`n_ctx`, `n_batch`, `n_ubatch`, Flash Attention, KV-Typ, Layer).
+- `scripts/sweep-batch.sh` – Batch-Leiter je Host (startet den Container neu).
+- `scripts/compare-batch-quality.py` – vergleicht Antworten bei verschiedenen Batch-Größen.
+
 ## Umgebungsvariablen (fork-spezifisch)
 
 | Variable | Wirkung | Default |
 | --- | --- | --- |
 | `OLLAMA_MAX_BATCH_SIZE` | Batchgröße (`-b`/`-ub`) | Stock-Wert |
-| `OLLAMA_DRAFT_NUM_PREDICT` | MTP-Draft-Länge, 0 = aus | 0 (durch gpu-detect) |
+| `OLLAMA_DRAFT_NUM_PREDICT` | MTP-Draft-Länge, Standard und Obergrenze (auch für Manifest-Werte), 0 = aus | 0 (durch gpu-detect) |
 | `OLLAMA_UNSUPPORTED_GPU` | `mask`, `fail`, `ignore` | `mask` |
 | `OLLAMA_ALLOW_UNKNOWN_CC` | unbekannte CC zulassen | aus |
 | `GGML_CUDA_GRAPHS_LEGACY` | CUDA Graphs auf Legacy-GPUs | aus |
+| `LLAMA_PIPELINE_PARALLEL` | `0` = Pipeline-Parallelität aus | an |
 | `LLAMA_INPUT_LAYER_GPU` | `0` = Embedding wie Upstream auf der CPU | an |
 | `LLAMA_ARG_FIT_TARGET` | Fit-Reserve je GPU in MiB (llama.cpp-Variable) | Upstream (~2 GiB) |
 
-Hinweis: `LLAMA_ARG_FIT_TARGET` ist Upstream; der Fork empfiehlt `256`, weil mit
-dem Embedding im VRAM sonst ein Experten-Tensor (210,82 MiB `ffn_down_exps`) in
-den Host-RAM ausweicht.
+`LLAMA_ARG_FIT_TARGET` ist Upstream; der Fork empfiehlt `256`, weil mit dem Embedding im VRAM
+sonst ein Experten-Tensor (210,82 MiB `ffn_down_exps`) in den Host-RAM ausweicht.
 
 ## Nicht geändert
 
