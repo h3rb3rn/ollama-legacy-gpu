@@ -37,6 +37,26 @@ Zwei Abweichungen zwischen den Hosts, die Vergleiche verfälschen können:
 - **N11-M10 `GGML_CUDA_GRAPHS_LEGACY=1`:** Opt-in-CUDA-Graphs auf Maxwell (dort +35 % Decode gemessen, auf N02-M60 ohne Effekt).
   Die N11-Zahlen enthalten diesen Effekt, die N02-Zahlen nicht.
 
+## Modellversionen `qwen3.6:35b` (Befund vom 2026-10-05)
+
+| Host | Digest | Parameter | Größe | Blöcke | NextN-Kopf | Manifest-Parameter |
+|---|---|---|---|---|---|---|
+| N11-M10, N04-RTX | `07d35212591f` | 36,0B (35 951 822 704) | 22,29 GiB | 40 | nein | – |
+| N02-M60 | `637d2bc25380` (Tag `qwen3.6:35b`) | 35,5B (35 505 251 456) | 21,07 GiB | 41 | ja (`blk.40.nextn.*`) | `draft_num_predict 0` |
+| Registry heute (Test-Pull auf N02-M60) | `a7eb95c53bcf` | 35,5B | 21,07 GiB | 41 | ja | **`draft_num_predict 2`** |
+
+- Die 36,0B-Version auf N11-M10 und N04-RTX ist der ältere Registry-Stand (lokal geladen 2026-06-08/10). Die 35,5B-Version ist
+  der **aktuelle** Registry-Stand: dieselbe Modelldatei (`d372de8e…`) wie auf N02-M60, das Manifest unterscheidet sich nur im
+  Parameter `draft_num_predict` (Registry 2, N02-M60 lokal 0). Meine frühere Aussage, die N02-Variante sei durch das Neuerstellen
+  mit Modelfile entstanden, war falsch; neu war dort nur der Parameter.
+- Das 36,0B-Original ist über `ollama pull` nicht mehr zu bekommen; es existiert nur auf N11-M10 und N04-RTX.
+- **Folge für den MTP-Schutz:** Das Registry-Manifest setzt `draft_num_predict 2` ausdrücklich. Im Fork zählt ein im Modell
+  gesetzter Wert als ausdrücklich, deshalb gilt der serverweite Default `OLLAMA_DRAFT_NUM_PREDICT=0` für dieses Modell nicht. Ein
+  Test-Pull auf N02-M60 hat den Schutz ausgehebelt (Tag stand kurz auf dem Registry-Digest); er wurde aus dem Backup-Tag
+  `qwen3.6:35b-n02-nextn-20261003` sofort wiederhergestellt, es gab keine MTP-Aktivität und keinen CUDA-Fehler im Log.
+  Auf N11-M10 und N04-RTX liegt der ältere Stand ohne NextN-Kopf, dort greift das nicht; ein Pull der aktuellen Version würde dort
+  (auf N11-M10 mit Maxwell-Absturzrisiko) denselben Effekt haben.
+
 ## Wo die Konfiguration liegt
 
 | Host | Datei(en) | Versioniert? |

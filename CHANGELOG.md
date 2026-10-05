@@ -69,6 +69,10 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
   vorher 260 MiB Host-Puffer = „1 % CPU“ auf N02-M60), N04-RTX bleibt bei 512 und läuft auf drei GPUs (2× RTX 2060 + 1× RTX 3060,
   eine 3060 für ComfyUI frei): 42.7 tok/s Decode, ~1050–1170 tok/s Prefill, 42/42 bei 262144 Kontext.
   Fleet-/Git-Lage: `docs/FLEET-STATE-2026-10-05.md`.
+- **Einschränkung zu Gap 2 (2026-10-05):** `OLLAMA_DRAFT_NUM_PREDICT=0` greift nur, wenn weder Modell noch Anfrage `draft_num_predict`
+  setzen. Das Registry-Manifest von `qwen3.6:35b` (Digest `a7eb95c53bcf`, 35,5B, NextN-Kopf) setzt `draft_num_predict 2` und
+  umgeht den serverweiten Default; die frühere Abnahme war mit einem lokal erstellten Tag ohne diesen Parameter erfolgt. Gap 2 ist
+  damit für frisch gezogene Registry-Modelle **nicht geschlossen** (Details in `docs/FLEET-STATE-2026-10-05.md`).
 - **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 
