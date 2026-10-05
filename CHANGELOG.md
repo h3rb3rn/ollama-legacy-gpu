@@ -65,6 +65,10 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
 - **Batch je Instanz (2026-10-05):** Leiter 64…2048 bei 262144 Kontext/q4_0: N04-RTX 512 optimal (1024: 887–1009, 2048: ~550 tok/s Prefill,
   eine GPU leer), N11-M10/N02-M60 wirksam max. 512 (Env 1024/2048 → `-b 512`). Endstand auf allen drei Hosts: 512, 42/42, Kontext 262144.
   `scripts/sweep-batch.sh`, Tabelle in `TUNING-2026-10-04.md`.
+- **Endstand je Instanz (2026-10-05, später am Tag):** N11-M10 und N02-M60 auf Batch 64 (nichts außerhalb des VRAM, Anzeige 100 % GPU;
+  vorher 260 MiB Host-Puffer = „1 % CPU“ auf N02-M60), N04-RTX bleibt bei 512 und läuft auf drei GPUs (2× RTX 2060 + 1× RTX 3060,
+  eine 3060 für ComfyUI frei): 42.7 tok/s Decode, ~1050–1170 tok/s Prefill, 42/42 bei 262144 Kontext.
+  Fleet-/Git-Lage: `docs/FLEET-STATE-2026-10-05.md`.
 - **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 

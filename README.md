@@ -54,9 +54,10 @@ each measurement.
   while 40 % had < 64 tokens (no difference there).
 - **Quality:** on N04-RTX, 6/6 greedy answers (incl. a 18k-token needle test) were identical at batch 64 and 512,
   and identical between two runs at 512. Not verified on Maxwell.
-- **Chosen per instance** (goal: 256k KV cache at q4_0 fully in VRAM): **512 on all three**. N04-RTX (12 GiB cards): 512 is
-  the optimum, 1024 (prefill 887–1009 tok/s) and 2048 (≈550 tok/s, one GPU left empty) are slower. N11-M10 / N02-M60 (8 GiB
-  cards): 512 is the ceiling, higher env values are capped to `-b 512`; it fits with 42/42 layers.
+- **Chosen per instance** (goal: 256k KV cache at q4_0, everything in VRAM, nothing in RAM, model kept warm): **N04-RTX 512**
+  (now 2× RTX 2060 + 1× RTX 3060, one 3060 freed for ComfyUI; 42.7 tok/s decode, ~1050–1170 tok/s prefill; 1024 and 2048 are
+  slower), **N11-M10 and N02-M60 64**. On the 8 GiB hosts 512 is the ceiling (higher env values are capped to `-b 512`) but
+  leaves a 260 MiB pinned host buffer that Ollama shows as ~1 % CPU; at 64 it is 33 MiB and the model shows 100 % GPU.
   `scripts/sweep-batch.sh` reproduces the ladder (it restarts the host's container).
 - **Cost:** batch 512 needs ~0.27 GB pinned host RAM at ctx 262144 (`n_ctx × n_ubatch × 2 B`; ~0.03 GB at 64)
   and 0.1–0.5 GiB more VRAM per GPU; on 8 GiB cards only ~0.3 GiB VRAM stays free.
