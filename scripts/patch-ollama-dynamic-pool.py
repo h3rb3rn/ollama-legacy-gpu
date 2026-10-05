@@ -359,6 +359,11 @@ def patch(path: Path) -> bool:
 \t//
 \t// selectGPUPool sets OLLAMA_MAX_BATCH_SIZE for the full pool path.
 \tif _maxBatchStr := os.Getenv("OLLAMA_MAX_BATCH_SIZE"); _maxBatchStr != "" {
+\t\t// [OLLAMA_CTX_HALVING_FA_GUARD] The halving below only makes sense WITHOUT Flash
+\t\t// Attention, where the compute buffer scales with n_ctx (11.6 GiB at 262144). With FA it is
+\t\t// a few hundred MiB, and halving silently turned every OLLAMA_MAX_BATCH_SIZE setting
+\t\t// (any value, any pool) into a halved context: -c 262144 ran as -c 131072.
+\t\tif LlamaServerFlashAttention(launch.gpus) == ml.FlashAttentionDisabled {
 \t\tfor _pi := 0; _pi < len(params)-1; _pi++ {
 \t\t\tswitch params[_pi] {
 \t\t\tcase "-np", "--parallel":
@@ -376,6 +381,7 @@ def patch(path: Path) -> bool:
 \t\t\t\t\tparams[_pi+1] = strconv.Itoa(_newCtx)
 \t\t\t\t}
 \t\t\t}
+\t\t}
 \t\t}
 \t\t// H6: hard cap context for full pool — prevents 78 GB CUDA_Host CPU buffer on
 \t\t// hybrid architectures (recurrent state × long context explodes CPU allocation).

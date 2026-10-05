@@ -56,6 +56,9 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
 - **Ollama 0.35.1:** Fork baut ohne Bonsai (`BONSAI=OFF`, neuer CI-Default; `OLLAMA_BONSAI`-Variable bzw. Dispatch-Input `bonsai`).
   Bonsai bricht auf 0.35.1 beim Compat-Patch `002-clef.patch` (Prism-Baum) — Nachzug folgt.
 - **Tuning:** siehe `TUNING-2026-10-04.md` (Batch 512: Prefill ×1.75–2.1; MTP-Default 0 für alle Hosts).
+- **Kontext-Halbierung behoben:** `patch-ollama-dynamic-pool.py` halbierte `-c` bei jedem gesetzten `OLLAMA_MAX_BATCH_SIZE`
+  (262144 → 131072). Jetzt nur noch bei ausdrücklich deaktivierter Flash Attention. N04-RTX bestätigt: `-c 262144`, 42/42,
+  40.5 tok/s Decode, ~640 tok/s Prefill bei Batch 64. Frühere Fork-Messungen liefen mit 131072 (siehe TUNING-Doku).
 - **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 

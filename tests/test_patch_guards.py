@@ -126,6 +126,24 @@ class CompatibilityGuards(unittest.TestCase):
             path.write_text('unrelated\n' + module.OLD)
             self.assertFalse(module.patch(path))
 
+    def test_ctx_halving_only_without_flash_attention(self):
+        module = load('patch-ollama-dynamic-pool')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'source.go'
+            path.write_text('params = appendFlashAttentionArgs(params, launch.gpus)\n'
+                            '// LlamaServerFlashAttention\nfunc LlamaServerFlashAttention() {}\n')
+            self.assertTrue(module.patch(path))
+            code = path.read_text()
+        cond = code.index('LlamaServerFlashAttention(launch.gpus) == ml.FlashAttentionDisabled')
+        halving = code.index('halving -c to match num_parallel=1')
+        cap = code.index('OLLAMA_MAX_CTX_FULL_POOL')
+        # -c/-np halving sits inside the "FA explicitly disabled" condition; the explicit
+        # OLLAMA_MAX_CTX_FULL_POOL cap stays outside of it.
+        self.assertLess(code.index('OLLAMA_CTX_HALVING_FA_GUARD'), cond)
+        self.assertLess(cond, halving)
+        self.assertLess(halving, cap)
+        self.assertEqual(code.count('{'), code.count('}'))
+
 
 if __name__ == '__main__':
     unittest.main()
