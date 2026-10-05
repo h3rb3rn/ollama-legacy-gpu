@@ -62,6 +62,9 @@ Messwerte `qwen3.6:35b` (120 Token, temperature 0):
 - **Batch 64 vs. 512 (2026-10-05):** Qualität in 6/6 Prompts identisch inkl. Needle bei 18k Token (N04-RTX); Prefill ×1.7–2.1;
   Kosten ~0.27 GB Host-RAM (Attention-Maske, `n_ctx×n_ubatch×2`). Prompt-Längen aus den Logs: Median 210, p90 28 885, Max 181 904 Token.
   Daten: `TUNING-2026-10-04.md`, `docs/evidence/batch-quality-2026-10-05/`.
+- **Batch je Instanz (2026-10-05):** Leiter 64…2048 bei 262144 Kontext/q4_0: N04-RTX 512 optimal (1024: 887–1009, 2048: ~550 tok/s Prefill,
+  eine GPU leer), N11-M10/N02-M60 wirksam max. 512 (Env 1024/2048 → `-b 512`). Endstand auf allen drei Hosts: 512, 42/42, Kontext 262144.
+  `scripts/sweep-batch.sh`, Tabelle in `TUNING-2026-10-04.md`.
 - **Offen:** Gap 3 (restliche Ursache des CPU-gebundenen Main-Threads); Mixed-Pool Maxwell+RTX in
   *einem* Container und `OLLAMA_UNSUPPORTED_GPU`-Maskierung nicht auf Hardware getestet.
 

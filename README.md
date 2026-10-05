@@ -33,7 +33,7 @@ kept as history. See [the 0.35.0 fleet report](FLEET-ROLLOUT-0.35.0-2026-10-01.m
 | `OLLAMA_ALLOW_UNKNOWN_CC` | explicitly allow unknown compute capabilities |
 | `GGML_CUDA_GRAPHS_LEGACY` | opt-in CUDA graphs on CC < 7.0 |
 | `LLAMA_INPUT_LAYER_GPU` | `0` restores upstream CPU placement of the embedding |
-| `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` recommended here) |
+| `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` needed so no expert tensor (`ffn_down_exps`, ~211 MiB) spills to the host) |
 
 ### Batch size: what it changes (measured 2026-10-05, ctx 262144, `ctxfix-20261005`)
 
@@ -53,6 +53,10 @@ each measurement.
   while 40 % had < 64 tokens (no difference there).
 - **Quality:** on N04-RTX, 6/6 greedy answers (incl. a 18k-token needle test) were identical at batch 64 and 512,
   and identical between two runs at 512. Not verified on Maxwell.
+- **Chosen per instance** (goal: 256k KV cache at q4_0 fully in VRAM): **512 on all three**. N04-RTX (12 GiB cards): 512 is
+  the optimum, 1024 (prefill 887–1009 tok/s) and 2048 (≈550 tok/s, one GPU left empty) are slower. N11-M10 / N02-M60 (8 GiB
+  cards): 512 is the ceiling, higher env values are capped to `-b 512`; it fits with 42/42 layers.
+  `scripts/sweep-batch.sh` reproduces the ladder (it restarts the host's container).
 - **Cost:** batch 512 needs ~0.27 GB pinned host RAM at ctx 262144 (`n_ctx × n_ubatch × 2 B`; ~0.03 GB at 64)
   and 0.1–0.5 GiB more VRAM per GPU; on 8 GiB cards only ~0.3 GiB VRAM stays free.
   Weights themselves are 100 % in VRAM. Details and limits: [TUNING-2026-10-04.md](TUNING-2026-10-04.md).
