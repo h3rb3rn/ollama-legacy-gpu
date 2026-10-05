@@ -18,6 +18,7 @@ this test; `cuda11-legacy` and `cuda13-rtx` carry the patch untested.
   scripts, per-image patch matrix and environment variables.
 - [Test report 2026-10-04](docs/TEST-REPORT-2026-10-04.md) – results with all
   settings used, and the limitations.
+- [Fleet state and git situation of the deployment clones, 2026-10-05](docs/FLEET-STATE-2026-10-05.md).
 - [CHANGELOG](CHANGELOG.md).
 
 Older results below (Bonsai, 0.35.0 fleet rollout, 0.34.1 RTX qualification) are
