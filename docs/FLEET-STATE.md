@@ -57,9 +57,9 @@ Die ignorierten `.env`-Dateien (u. a. `worker-tesla/.env`, `worker-legacy-gpu/.e
 
 ## Git-Stand
 
-`origin/main` des Deployment-Repos steht bei `b7ec515`. Die Klone auf N04-RTX, N02-M60, N11-M10 und dem Steuerhost stehen
-auf demselben Commit, ohne Abweichungen bei getrackten oder unversionierten Dateien (Steuerhost: unversioniert nur
-`llm-studio/vm-without-gpu/.env.example`, `.env.ollama` und das Arbeitsverzeichnis `fork/`).
+Die Klone des Deployment-Repos auf N04-RTX, N02-M60, N11-M10 und dem Steuerhost stehen auf `origin/main`, ohne Abweichungen
+bei getrackten oder unversionierten Dateien (Steuerhost: unversioniert nur `llm-studio/vm-without-gpu/.env.example` und
+`.env.ollama`; `CLAUDE.md`, `.claude/` und `fork/` sind per `.gitignore` ausgenommen).
 Die Historie enthält die Stände der drei Hosts als Merge (N02-M60 als Fast-Forward, N04-RTX als Merge, der Live-Stand von N04-RTX
 gewinnt) und die Compose von N11-M10. Herkunft der älteren Commits: `8c97f04`, `34f264f` (2026-09-05, N02-Pools) sowie `82e2b66`,
 `e3e21e5` (2026-10-03, MTP-Race-Fix, Merge mit origin) aus früheren Claude-Sessions, `badabbd` (2026-10-04) aus der Parallel-Session
