@@ -6,11 +6,11 @@ Die `:11434`-Instanzen von N04-RTX, N02-M60 und N11-M10 und der Zustand des Depl
 Vorgaben für die Instanzen: 256k-KV-Cache bei q4_0, alles im VRAM und nichts im RAM, `qwen3.6:35b` primär und warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live-Stand (Image `ollama-gaps:pipefix-20261005`, Ollama 0.35.1)
+## Live-Stand (Ollama 0.35.1; N04-RTX und N11-M10: `ollama-gaps:pipefix-20261005`, N02-M60: `ollama-gaps:kolibri-20261006`)
 
-| Einstellung | N04-RTX | N02-M60 (Pool GPU0–3) | N11-M10 |
+| Einstellung | N04-RTX | N02-M60 (12 GPUs) | N11-M10 |
 |---|---|---|---|
-| Karten im Pool | 3: 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 4× Tesla M60 (8 GiB) | 4× Tesla M10 (8 GiB) |
+| Karten im Pool | 3: 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 12× Tesla M60 (8 GiB), Greedy-Fill belegt 8 | 4× Tesla M10 (8 GiB) |
 | Frei für anderes | 1× RTX 3060 (`GPU-63bfbd4b-…`, Bus 09:00.0), genutzt von ComfyUI | – | – |
 | `OLLAMA_CONTEXT_LENGTH` | 262144 | 262144 | 262144 |
 | Batch (`OLLAMA_MAX_BATCH_SIZE`, `LLAMA_ARG_BATCH`, `LLAMA_ARG_UBATCH`) | 512 | 64 | 64 |
@@ -19,6 +19,7 @@ Vorgaben für die Instanzen: 256k-KV-Cache bei q4_0, alles im VRAM und nichts im
 | `LLAMA_ARG_MMPROJ_OFFLOAD` | true | true | true |
 | `OLLAMA_DRAFT_NUM_PREDICT` | 0 | 0 | 0 |
 | `OLLAMA_GPU_AUTODETECT` | 0 | 1 | 0 |
+| `OLLAMA_FORCE_GPU_LAYERS` / `OLLAMA_LAYER_OVERHEAD_SCALE` | – | 1 / 1.10 | – |
 | `GGML_CUDA_GRAPHS_LEGACY` | – | – | 1 |
 | `LLAMA_PIPELINE_PARALLEL` | nicht gesetzt (Pipeline an) | 0 | 0 |
 | Layer / wirksamer Kontext | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
@@ -30,6 +31,10 @@ Messwerte, Methode und Begründung der Einstellungen: [TUNING.md](TUNING.md).
 
 Unterschiede zwischen den Hosts, die Vergleiche beeinflussen: N02-M60 läuft mit `OLLAMA_GPU_AUTODETECT=1` (aktiviert den
 Fit des Forks), N11-M10 mit `GGML_CUDA_GRAPHS_LEGACY=1` (auf N11-M10 +35 % Decode, auf N02-M60 ohne Effekt).
+
+Die Spalten Decode/Prefill, Layer-Zeilen und Host-Puffer für N02-M60 stammen aus dem früheren 4-GPU-Pool (`qwen3.6:35b`,
+15,0–16,0 / 91–93 tok/s). Auf der 12-GPU-Instanz läuft `qwen3.6:35b` mit 10,4 tok/s (alle 12 GPUs); `Kolibri-1-Q4_K_M` (78,1B, 51/51 Layer,
+`-c 262144`) mit 11,7–11,8 tok/s auf 8 GPUs, Messung in [FORK-VS-STOCK.md](FORK-VS-STOCK.md).
 
 ## Modell und MTP-Schutz
 
@@ -47,7 +52,7 @@ Der ausgerollte Stand aller Hosts liegt im `main`-Branch des Deployment-Repos:
 | Host | Dateien | Dienste |
 |---|---|---|
 | N04-RTX | `llm-studio/worker-rtx/docker-compose.yml` mit `.env.stock-rtx`, `.env.stock-rgtx`, `.env.tesla`; `docker-compose.m60-guard.yml`; `docker-compose.bonsai-m10-prod.yml`; `update.sh` | `ollama` (:11434), `ollama-rgtx` (:11435, Stock), `ollama-m60-guard` (:11442), `ollama-tesla-bonsai` (:11436), ComfyUI |
-| N02-M60 | `llm-studio/worker-m60/docker-compose.yml` mit `.env.m60-pool` und `.env.m60-single` | `ollama-m60-pool` (:11434) und acht Einzel-GPU-Instanzen (:11435–11442) |
+| N02-M60 | `llm-studio/worker-m60/docker-compose.single12.yml` mit `.env.m60-single12` | `ollama-m60-12` (:11434), eine Instanz über alle 12 GPUs |
 | N11-M10 | `llm-studio/worker-tesla/docker-compose.yml` (JSON) | `ollama` (:11434) |
 | Steuerhost | `llm-studio/vm-without-gpu/docker-compose.yml` | `open-webui`, `searxng` |
 
