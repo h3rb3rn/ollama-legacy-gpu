@@ -7,14 +7,14 @@ and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2
 ## Status (2026-10-05)
 
 The build is based on **Ollama v0.35.1** (llama.cpp b11232) with `BONSAI=OFF` by default. The image
-`ollama-gaps:pipefix-20261005` serves `qwen3.6:35b` (35.5B, Q4_K_M) on the `:11434` instances of three hosts with a
+`ollama-gaps:pipefix-20261005` (N02-M60: `ollama-gaps:kolibri-20261006`) serves `qwen3.6:35b` (35.5B, Q4_K_M) on the `:11434` instances of three hosts with a
 **262144-token context, q4_0 KV cache and all 42 layers on the GPUs**. Weights, KV cache and compute buffers live in VRAM; only
 small pinned staging buffers stay in host memory.
 
 | Host | GPUs in the pool | Batch | Pipeline parallelism | Decode | Prefill | Host buffer |
 | --- | --- | --- | --- | --- | --- | --- |
 | N04-RTX | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 512 | on | 42.3 tok/s | ~1150 tok/s | 1029 MiB |
-| N02-M60 | 4× Tesla M60 (8 GiB) | 64 | off | 15–16 tok/s | ~92 tok/s | 32.8 MiB |
+| N02-M60 | 12× Tesla M60 (8 GiB), one instance | 64 | off | 10.4 tok/s (`qwen3.6:35b`, 12 GPUs) | – | – |
 | N11-M10 | 4× Tesla M10 (8 GiB) | 64 | off | 9.3 tok/s | ~24 tok/s | 32.8 MiB |
 
 - [What the fork does differently from stock](docs/FORK-VS-STOCK.md) – patches, scripts, per-image patch matrix, environment variables.
@@ -33,6 +33,8 @@ small pinned staging buffers stay in host memory.
 | `GGML_CUDA_GRAPHS_LEGACY` | opt-in CUDA graphs on CC < 7.0 |
 | `LLAMA_PIPELINE_PARALLEL` | `0` disables llama.cpp pipeline parallelism (multi-GPU layer split): saves pinned host RAM (4× input buffers) and ~100 MiB VRAM per GPU; no gain on Maxwell, +7 % decode / ~+20 % prefill on the RTX pool |
 | `LLAMA_INPUT_LAYER_GPU` | `0` restores upstream CPU placement of the embedding |
+| `OLLAMA_FORCE_GPU_LAYERS` | `1` replaces the fit by a greedy fill (highest CUDA index first, as few GPUs as needed); Kolibri-1 Q4_K_M uses 8 of 12 Tesla M60 |
+| `OLLAMA_LAYER_OVERHEAD_SCALE` | factor on the per-layer weights in the greedy fill (reserve for compute buffers and KV); `1.10` works on 8 GiB M60, `1.03` runs out of memory |
 | `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` keeps expert tensors such as `ffn_down_exps`, ~211 MiB, out of host memory) |
 
 ### Tuning summary
@@ -48,6 +50,16 @@ runner log (`llama_context: n_batch`), not the env file; `scripts/bench-throughp
 - **MTP** is off (`OLLAMA_DRAFT_NUM_PREDICT=0`): it is slower on the RTX pool and crashes on Maxwell.
 
 Details, tables and limits: [docs/TUNING.md](docs/TUNING.md).
+
+### More than eight GPUs and Kolibri-1
+
+- **Twelve GPUs in one instance:** NCCL builds forced peer access on every VMM pool allocation; CUDA allows 8 peers per mapping, so 9, 10 and
+  12 visible GPUs aborted with `peer mapping resources exhausted`. `patch-llama-vmm-peer-access.py` limits the forcing to eight devices;
+  12× Tesla M60 now load `qwen3.6:35b` in one instance (10.4 tok/s, slower than the 4-GPU pool's 15–16 tok/s).
+- **Kolibri-1** (`kolibri1`, 78.1B MoE): `patch-llama-kolibri1.py` adds the architecture. `Kolibri-1-Q4_K_M` runs with `-c 262144`, all 51
+  layers in VRAM (51.5 GB on 8 GPUs with `OLLAMA_FORCE_GPU_LAYERS=1`, scale `1.10`; 7 GPUs fail with CUDA out of memory), 11.7–11.8 tok/s decode.
+
+Tables and limits: [docs/TUNING.md](docs/TUNING.md).
 
 ## GPU compatibility
 

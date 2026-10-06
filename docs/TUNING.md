@@ -1,4 +1,4 @@
-# Tuning und Messwerte (Stand 2026-10-05)
+# Tuning und Messwerte (Stand 2026-10-07)
 
 Modell `qwen3.6:35b` (Q4_K_M), Kontext 262144, KV-Cache q4_0, Flash Attention an, `LLAMA_ARG_FIT_TARGET=256`,
 Ollama 0.35.1 mit den Patches dieses Repos. Messungen mit `scripts/bench-throughput.sh`: Decode mit dem Prompt
@@ -112,6 +112,53 @@ Gleiches Image, Kontext 262144, Batch 512, Pipeline an, gleiches Skript:
 
 Mit drei GPUs ist der Decode etwa 4 % höher (eine Pipeline-Stufe weniger; nicht geprüft). Der Kontext ist vorab reserviert und
 wächst nicht. Die vierte RTX-3060 ist für andere Aufgaben frei.
+
+## Mehr als 8 GPUs in einer Instanz (N02-M60, 12× Tesla M60)
+
+Test: eine Instanz mit `qwen3.6:35b` (Kontext 262144, q4_0, Batch 64, `LLAMA_PIPELINE_PARALLEL=0`), die Anzahl sichtbarer GPUs über
+`CUDA_VISIBLE_DEVICES` gesteuert (die Container-Compose reicht stets alle 12 Karten durch, das Discovery-Log meldet deshalb immer 12).
+
+| Image | Sichtbare GPUs | Ergebnis |
+|---|---|---|
+| `pipefix-20261005` (ohne Patch) | 9 | `CUDA error: peer mapping resources exhausted` beim ersten Laden |
+| `pipefix-20261005` (ohne Patch) | 10 | derselbe Fehler |
+| `pipefix-20261005` (ohne Patch) | 12 | derselbe Fehler (`cuMemSetAccess` in `ggml_cuda_pool_vmm::alloc`, `ggml-cuda.cu:635`) |
+| `vmmpeer-20261006` (mit `patch-llama-vmm-peer-access.py`) | 12 | lädt in 124 s, 42/42 Layer, 12 GPUs mit Last, 10,4 tok/s Decode |
+
+Nicht gemessen: genau 8 sichtbare GPUs ohne Patch (die Grenze 8 folgt aus dem CUDA-Limit von 8 Peers je Mapping, nicht aus einer Messung).
+
+**Ursache:** `libggml-cuda.so` ist gegen NCCL gelinkt (`libnccl.so.2` in `ldd`), dadurch ist `use_peer_access` in `ggml_cuda_pool_vmm::alloc`
+immer wahr und `cuMemSetAccess` bekommt Zugriffsdeskriptoren für alle sichtbaren Geräte. CUDA erlaubt höchstens 8 Peers je Mapping
+(`CUDA_ERROR_TOO_MANY_PEERS`). Der Patch erzwingt den Peer-Zugriff nur bis 8 Geräte; darüber erhält nur das besitzende Gerät Zugriff.
+
+`qwen3.6:35b` ist auf allen 12 GPUs mit 10,4 tok/s langsamer als auf dem 4-GPU-Pool (15,0–16,0 tok/s): mehr Stufen, kein Gewinn bei einem
+Modell, das in vier Karten passt.
+
+## Kolibri-1 und GPU-Reduktion (N02-M60)
+
+`hf.co/Hob-forge/Kolibri-1-GGUF:Q4_K_M`: Architektur `kolibri1`, 78,1B Parameter (384 Experten, 6 aktiv), 47,5 GB, 51 Layer, Kontext 262144.
+Ohne `patch-llama-kolibri1.py` bricht das Laden mit `unknown model architecture: 'kolibri1'` ab. Image `kolibri-20261006`, Batch 64, q4_0.
+
+| Prüfung | Ergebnis |
+|---|---|
+| Laden (12 GPUs, Fit mit Spread) | 51/51 Layer, `-c 262144`, 53,2 GB VRAM, nichts im RAM, 267 s |
+| Deutsch (drei Sätze zum blauen Himmel) | fließend; 10,4 tok/s Decode |
+| Rechnen mit Reasoning (Durchschnittsgeschwindigkeit) | richtig (80), 11,0 tok/s |
+| Tool-Call (`get_weather`, Heidelberg) | richtig, Argument `{"city": "Heidelberg"}` |
+| Nadel-Test (9421 Token Prompt) | Code gefunden, 56,8–58,5 tok/s Prefill, 10,9–11,8 tok/s Decode |
+
+Mit `think: false` landet der Gedankengang im `content` statt in `thinking`; mit `think: true` ist er getrennt (nicht weiter untersucht).
+
+**GPU-Reduktion** mit `OLLAMA_FORCE_GPU_LAYERS=1` (Greedy-Fill, hoechster CUDA-Index zuerst, nur so viele GPUs wie nötig):
+
+| `OLLAMA_LAYER_OVERHEAD_SCALE` | GPUs mit Last | VRAM gesamt | höchste GPU | Decode | Ergebnis |
+|---|---|---|---|---|---|
+| (aus, Fit mit Spread) | 12 | 53,2 GB | 5,8 GB | 10,4–12,5 tok/s | läuft |
+| 1.10 | 8 | 51,5 GB | 7,2 GB | 11,7–11,8 tok/s | läuft; Nadel-Test mit 9421 Token bestanden, kein CUDA-Fehler |
+| 1.03 | 7 | 50,9 GB | 8,1 GB | – | lädt, dann `CUDA error: out of memory` bei der ersten Anfrage, Neuladen (254 s je Versuch) |
+
+Mit 1.10 liegt die Reserve je Karte bei etwa 0,9 GB; 7 GPUs lassen keinen Platz für die Compute-Puffer einer Anfrage. Der Faktor gilt
+für diese Karten und dieses Modell; `OLLAMA_FORCE_GPU_LAYERS` ersetzt den Fit für jedes Modell der Instanz (andere Modelle nicht gemessen).
 
 ## Weitere Befunde
 
