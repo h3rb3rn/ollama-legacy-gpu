@@ -176,6 +176,20 @@ class CompatibilityGuards(unittest.TestCase):
             path.write_text('unrelated\n')
             self.assertFalse(module.patch(path))
 
+    def test_kolibri1_patch_applies_once_and_fails_closed(self):
+        module = load('patch-llama-kolibri1')
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            (base / 'src').mkdir()
+            (base / 'src' / 'llama-arch.h').write_text('unrelated\n')
+            self.assertFalse(module.patch(base))
+            (base / 'src' / 'llama-arch.h').write_text('LLM_ARCH_KOLIBRI1 already here\n')
+            self.assertTrue(module.patch(base))
+        patch_text = module.PATCH_FILE.read_text()
+        self.assertEqual(patch_text.count('\ndiff --git '), 8)
+        self.assertIn('LLM_ARCH_KOLIBRI1', patch_text)
+        self.assertNotIn('\n+++ b/conversion/', patch_text)
+
 
 if __name__ == '__main__':
     unittest.main()

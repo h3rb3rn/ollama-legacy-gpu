@@ -6,12 +6,14 @@ All notable changes to this fork are documented here.
 
 ## [Unreleased] — 2026-10-06
 
+- **Kolibri-1:** `patch-llama-kolibri1.py` adds the `kolibri1` architecture (runtime part of the patch published with `Hob-forge/Kolibri-1-GGUF`). `Kolibri-1-Q4_K_M` (78.1B MoE, 47.5 GB) loads in one instance over 12× Tesla M60: 51/51 layers, `-c 262144`, batch 64, all in VRAM (53.2 GB). Decode 10.4–12.5 tok/s; German, reasoning, tool call and a 9421-token needle test pass.
+
 - **VMM peer access:** `patch-llama-vmm-peer-access.py` limits the forced peer access of the CUDA VMM pool in NCCL builds to eight devices. Nine or more GPUs in one instance aborted with `peer mapping resources exhausted`; 12× Tesla M60 now load `qwen3.6:35b` (42/42 layers, `-c 262144`, 10.4 tok/s decode) in one instance.
 
 ## 2026-10-05
 
 - **Based on:** Ollama v0.35.1 (llama.cpp b11232)
-- **Image:** `ollama-gaps:vmmpeer-20261006` (`cuda12-maxwell`, CUDA 12.0.1, Archs 50;52;61;75;86, FA=ON, `BONSAI=OFF`)
+- **Image:** `ollama-gaps:kolibri-20261006` (`cuda12-maxwell`, CUDA 12.0.1, Archs 50;52;61;75;86, FA=ON, `BONSAI=OFF`)
 
 Details: [docs/FORK-VS-STOCK.md](docs/FORK-VS-STOCK.md), [docs/TUNING.md](docs/TUNING.md), [docs/FLEET-STATE.md](docs/FLEET-STATE.md).
 

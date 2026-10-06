@@ -23,6 +23,7 @@ einmal gefunden wird.
 | Pipeline-Parallelität (Multi-GPU) | automatisch, vierfache Eingabepuffer im Host-RAM | per `LLAMA_PIPELINE_PARALLEL=0` abschaltbar |
 | CUDA Graphs | auf Legacy-GPUs deaktiviert | per `GGML_CUDA_GRAPHS_LEGACY=1` zuschaltbar |
 | Mehr als 8 GPUs in einem Prozess | NCCL-Build erzwingt VMM-Peer-Zugriff auf alle Geräte; ab 9 GPUs `peer mapping resources exhausted` | Erzwingung nur bis 8 Geräte (`patch-llama-vmm-peer-access.py`); 12× Tesla M60 laufen in einer Instanz |
+| Architektur `kolibri1` (Aleph Alpha Kolibri-1, 78B MoE) | `unknown model architecture: 'kolibri1'` | Architektur über `patches/kolibri1/` (`patch-llama-kolibri1.py`) |
 | Jinja `tojson` | Template-Fehler bei einigen Modellen | kompatibel |
 
 ## Patchskripte
@@ -56,6 +57,9 @@ llama.cpp:
   die Pipeline-Parallelität; ohne Variable unverändert.
 - `patch-llama-vmm-peer-access.py` – `ggml_cuda_pool_vmm::alloc` erzwingt in NCCL-Builds die Peer-Freigabe nur bis 8 Geräte
   (CUDA erlaubt 8 Peers je Mapping); mit 9–12 GPUs erhält nur das besitzende Gerät Zugriff.
+- `patch-llama-kolibri1.py` – spielt `patches/kolibri1/kolibri1-llama.cpp.patch` ein (Laufzeitteil des Patches aus
+  `Hob-forge/Kolibri-1-GGUF`, MIT): Gating-Modus `SIGMOID_LOGIT_ADD`, Modellgraph, Tokenizer-Typ `kolibri1`. Ohne den Patch
+  lädt kein Kolibri-1-GGUF. Das Skript berührt `src/CMakeLists.txt`, damit der `models/*.cpp`-Glob neu ausgewertet wird.
 - `patch-llama-jinja-tojson.py` – `tojson`-Kompatibilität.
 - `patch-llama-cuda-graphs-legacy.py` – Opt-in für CUDA Graphs auf CC < 7.0.
 
@@ -63,7 +67,7 @@ llama.cpp:
 
 | Patch | cuda11-legacy | cuda12-maxwell | cuda13-rtx |
 | --- | --- | --- | --- |
-| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, vmm-peer-access, jinja-tojson | ja | ja | ja |
+| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, vmm-peer-access, kolibri1, jinja-tojson | ja | ja | ja |
 | fa, dynamic-pool, batch | ja | ja | ja |
 | discovery, mtp-default | nein | ja | ja |
 | cuda-graphs-legacy | nein | ja | nein |
