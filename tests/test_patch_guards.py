@@ -161,6 +161,21 @@ class CompatibilityGuards(unittest.TestCase):
             path.write_text('unrelated\n')
             self.assertFalse(module.patch(path))
 
+    def test_vmm_peer_access_limit_is_idempotent_and_keeps_small_setups(self):
+        module = load('patch-llama-vmm-peer-access')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'ggml-cuda.cu'
+            path.write_text('before\n' + module.OLD + 'after\n')
+            self.assertTrue(module.patch(path))
+            first = path.read_text()
+            self.assertIn('ggml_cuda_info().device_count <= 8', first)
+            self.assertIn('use_peer_access = true;', first)
+            self.assertEqual(first.count('{'), first.count('}'))
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+            path.write_text('unrelated\n')
+            self.assertFalse(module.patch(path))
+
 
 if __name__ == '__main__':
     unittest.main()

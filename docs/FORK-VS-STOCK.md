@@ -22,6 +22,7 @@ einmal gefunden wird.
 | Fit (nextn-Slot) | zählt den Slot nur mit geladenem MTP; bei MTP aus bleibt Layer 0 auf der CPU (`41/42`) | zählt ihn immer mit (`42/42`) |
 | Pipeline-Parallelität (Multi-GPU) | automatisch, vierfache Eingabepuffer im Host-RAM | per `LLAMA_PIPELINE_PARALLEL=0` abschaltbar |
 | CUDA Graphs | auf Legacy-GPUs deaktiviert | per `GGML_CUDA_GRAPHS_LEGACY=1` zuschaltbar |
+| Mehr als 8 GPUs in einem Prozess | NCCL-Build erzwingt VMM-Peer-Zugriff auf alle Geräte; ab 9 GPUs `peer mapping resources exhausted` | Erzwingung nur bis 8 Geräte (`patch-llama-vmm-peer-access.py`); 12× Tesla M60 laufen in einer Instanz |
 | Jinja `tojson` | Template-Fehler bei einigen Modellen | kompatibel |
 
 ## Patchskripte
@@ -53,6 +54,8 @@ llama.cpp:
   bricht den Scheduler ab (N11-M10, b11232).
 - `patch-llama-pipeline-parallel.py` – `LLAMA_PIPELINE_PARALLEL=0` überspringt
   die Pipeline-Parallelität; ohne Variable unverändert.
+- `patch-llama-vmm-peer-access.py` – `ggml_cuda_pool_vmm::alloc` erzwingt in NCCL-Builds die Peer-Freigabe nur bis 8 Geräte
+  (CUDA erlaubt 8 Peers je Mapping); mit 9–12 GPUs erhält nur das besitzende Gerät Zugriff.
 - `patch-llama-jinja-tojson.py` – `tojson`-Kompatibilität.
 - `patch-llama-cuda-graphs-legacy.py` – Opt-in für CUDA Graphs auf CC < 7.0.
 
@@ -60,7 +63,7 @@ llama.cpp:
 
 | Patch | cuda11-legacy | cuda12-maxwell | cuda13-rtx |
 | --- | --- | --- | --- |
-| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, jinja-tojson | ja | ja | ja |
+| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, vmm-peer-access, jinja-tojson | ja | ja | ja |
 | fa, dynamic-pool, batch | ja | ja | ja |
 | discovery, mtp-default | nein | ja | ja |
 | cuda-graphs-legacy | nein | ja | nein |

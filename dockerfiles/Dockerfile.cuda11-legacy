@@ -56,6 +56,7 @@ COPY scripts/patch-llama-tier-fitting.py /tmp/patch-llama-tier-fitting.py
 COPY scripts/patch-llama-jinja-tojson.py  /tmp/patch-llama-jinja-tojson.py
 COPY scripts/patch-llama-fit-nextn.py     /tmp/patch-llama-fit-nextn.py
 COPY scripts/patch-llama-pipeline-parallel.py /tmp/patch-llama-pipeline-parallel.py
+COPY scripts/patch-llama-vmm-peer-access.py /tmp/patch-llama-vmm-peer-access.py
 COPY scripts/patch-llama-input-gpu.py    /tmp/patch-llama-input-gpu.py
 COPY scripts/patch-ollama-fa.py           /tmp/patch-ollama-fa.py
 COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
@@ -122,6 +123,8 @@ RUN python3 /tmp/patch-llama-tier-fitting.py /src
 RUN python3 /tmp/patch-llama-fit-nextn.py /src
 # LLAMA_PIPELINE_PARALLEL=0 opt-out: pipeline parallelism quadruples the pinned host buffer (no gain on our pools)
 RUN python3 /tmp/patch-llama-pipeline-parallel.py /src
+# NCCL builds force VMM peer access; CUDA allows 8 peers per mapping, so 9+ GPUs abort: limit the forcing to <= 8 devices
+RUN python3 /tmp/patch-llama-vmm-peer-access.py /src
 # Input layer (token embedding) in VRAM instead of host memory; opt out with LLAMA_INPUT_LAYER_GPU=0
 RUN python3 /tmp/patch-llama-input-gpu.py /src
 RUN python3 /tmp/patch-llama-jinja-tojson.py /src
