@@ -1,6 +1,6 @@
-# Fleet-Stand (2026-10-05)
+# Fleet-Stand (2026-10-06)
 
-Die `:11434`-Instanzen von N04-RTX, N02-M60 und N11-M10 und der Zustand der Klone des Deployment-Repos
+Die `:11434`-Instanzen von N04-RTX, N02-M60 und N11-M10 und der Zustand des Deployment-Repos
 (`https://git.4noobs.de/h3rb3rn/ollama.git`). Gelesen an den Hosts per `docker inspect`, `git status` und `git log`.
 
 Vorgaben für die Instanzen: 256k-KV-Cache bei q4_0, alles im VRAM und nichts im RAM, `qwen3.6:35b` primär und warm
@@ -38,49 +38,36 @@ Alle drei Hosts führen `qwen3.6:35b` im aktuellen Registry-Stand: Digest `a7eb9
 `OLLAMA_DRAFT_NUM_PREDICT=0` auf 0 begrenzt (MTP aus, `patch-ollama-mtp-default.py`), ein Anfragewert behält Vorrang. Geprüft je
 Host: Modell leer geladen, Runner-Kommandozeile ohne `--spec-*`-Argumente, danach Generierung ohne Fehler.
 
-Zusätzliche Tags auf den Hosts: N02-M60 `qwen3.6:35b-n02-nextn-20261003` (derselbe Stand mit `draft_num_predict 0`), N11-M10
-`qwen3.6:35b-36b-20260610` und N04-RTX `qwen3.6:35b-36b-20260608` (Digest `07d35212591f`, 36,0B, 22,29 GiB, 40 Blöcke,
-ohne NextN-Kopf; der ältere Registry-Stand, per `pull` nicht mehr erhältlich).
+Zusätzlich liegt auf N02-M60 das Tag `qwen3.6:35b-nospec` (Digest `aae923a8c006`, 35,5B, vom 2026-09-05).
 
 ## Wo die Konfiguration liegt
 
-| Host | Datei(en) | Versioniert? |
+Der ausgerollte Stand aller Hosts liegt im `main`-Branch des Deployment-Repos:
+
+| Host | Dateien | Dienste |
 |---|---|---|
-| N04-RTX | `llm-studio/worker-rtx/docker-compose.yml`, `.env.stock-rtx`, `docker-compose.m60-guard.yml`, `docker-compose.bonsai-m10-prod.yml` | ja (lokal committet, nicht gepusht) |
-| N02-M60 | `llm-studio/worker-m60/docker-compose.yml`, `.env.m60-pool` | ja (lokal committet, nicht gepusht) |
-| N11-M10 | `llm-studio/worker-tesla/docker-compose.yml` (JSON) | nein, per `llm-studio/worker-tesla/.gitignore` ausgeschlossen; der Live-Stand existiert nur auf dem Host |
+| N04-RTX | `llm-studio/worker-rtx/docker-compose.yml` mit `.env.stock-rtx`, `.env.stock-rgtx`, `.env.tesla`; `docker-compose.m60-guard.yml`; `docker-compose.bonsai-m10-prod.yml`; `update.sh` | `ollama` (:11434), `ollama-rgtx` (:11435, Stock), `ollama-m60-guard` (:11442), `ollama-tesla-bonsai` (:11436), ComfyUI |
+| N02-M60 | `llm-studio/worker-m60/docker-compose.yml` mit `.env.m60-pool` und `.env.m60-single` | `ollama-m60-pool` (:11434) und acht Einzel-GPU-Instanzen (:11435–11442) |
+| N11-M10 | `llm-studio/worker-tesla/docker-compose.yml` (JSON) | `ollama` (:11434) |
+| Steuerhost | `llm-studio/vm-without-gpu/docker-compose.yml` | `open-webui`, `searxng` |
 
-Auf N04-RTX laufen außerdem `ollama-tesla-bonsai` (:11436, Compose `docker-compose.bonsai-m10-prod.yml`), `ollama-m60-guard` (:11442,
-Compose `docker-compose.m60-guard.yml`, eingebunden per `extends`), `ollama-rgtx` (:11435, Stock) und ein ComfyUI-Container.
+`ollama-m60-guard` und `ollama-tesla-bonsai` laufen ohne Compose-Label; ihre Compose-Dateien beschreiben den laufenden Stand.
+Die Compose von N04-RTX bindet `ollama-m60-guard` per `extends` aus `docker-compose.m60-guard.yml` ein.
+Die ignorierten `.env`-Dateien (u. a. `worker-tesla/.env`, `worker-legacy-gpu/.env`, `worker-host/.env`) liegen nur auf den Hosts.
 
-## Klone des Deployment-Repos
+## Git-Stand
 
-`origin/main` steht bei `9077a63` (2026-09-16). Die Klone sind divergent:
+`origin/main` des Deployment-Repos steht bei `b7ec515`. Die Klone auf N04-RTX, N02-M60, N11-M10 und dem Steuerhost stehen
+auf demselben Commit, ohne Abweichungen bei getrackten oder unversionierten Dateien (Steuerhost: unversioniert nur
+`llm-studio/vm-without-gpu/.env.example`, `.env.ollama` und das Arbeitsverzeichnis `fork/`).
+Die Historie enthält die Stände der drei Hosts als Merge (N02-M60 als Fast-Forward, N04-RTX als Merge, der Live-Stand von N04-RTX
+gewinnt) und die Compose von N11-M10. Herkunft der älteren Commits: `8c97f04`, `34f264f` (2026-09-05, N02-Pools) sowie `82e2b66`,
+`e3e21e5` (2026-10-03, MTP-Race-Fix, Merge mit origin) aus früheren Claude-Sessions, `badabbd` (2026-10-04) aus der Parallel-Session
+`ai-village-f2`, die übrigen (2026-10-05) beschreiben den Live-Stand.
 
-| Klon | vor / hinter origin | lokale, nicht gepushte Commits |
-|---|---|---|
-| Steuerhost `/opt/deployment/ollama` | 0 / 0 | keine; uncommittet: `.gitignore`, `worker-host/docker-compose.yml`, `worker-m60/docker-compose.yml` |
-| N04-RTX | 7 / 2 | `8c97f04`, `badabbd`, `7cabec1`, `bdb9d51`, `e543b01`, `01903a9`, `f41b837`; es fehlen `82cc26b` und `9077a63` |
-| N02-M60 | 8 / 0 | `8c97f04`, `34f264f`, `82e2b66`, `e3e21e5` (Merge von origin), `1f5d33f`, `6bcbe7d`, `8921ffb`, `8f5587a` |
-| N11-M10 | 0 / 3 | keine; es fehlen `785e2a7`, `82cc26b`, `9077a63` |
+Der Quellcode des Forks liegt in `github.com/h3rb3rn/ollama-legacy-gpu` (Arbeitskopie: `/opt/deployment/ollama/fork/repo`).
+Rohdaten der Bonsai-Berichte liegen unter `/opt/deployment/ollama/fork/.bonsai-work/` (`rtx-fa-20260929`, `rollout-20260930`,
+`fleet-v035-20261001`) neben den Quell-Klonen `Bonsai-demo` und `mlx-vlm-0.7.2`.
 
-Herkunft der lokalen Commits: `8c97f04` und `34f264f` (2026-09-05, N02-Pools; `8c97f04` liegt auf N04-RTX und N02-M60) sowie
-`82e2b66` und `e3e21e5` (2026-10-03, MTP-Race-Fix, Merge mit origin) stammen aus früheren Claude-Sessions; `badabbd` (2026-10-04) aus
-der Parallel-Session `ai-village-f2`; die übrigen (2026-10-05) beschreiben den Live-Stand dieser Tabelle.
-
-Uncommittete Änderungen auf N11-M10 (Vorlagen für das N04-Design, nicht die Live-Config von N11-M10): `fork/compose/.env`
-(`OLLAMA_CONTEXT_LENGTH=132768` – vermutlich 131072 gemeint –, `MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`; zuletzt geändert 2026-09-16)
-und `llm-studio/worker-rtx/.env.tesla` (`OLLAMA_CONTEXT_LENGTH=262144`, zuletzt geändert 2026-08-29). Auf N11-M10 liegt außerdem
-der Klon `tesla/ollama-legacy-gpu/` (alter Stand des GitHub-Forks, Commit vom 2026-06-25, lokale Änderungen an `compose/.env` und
-`docker-compose.maxwell.yml`); die lokale `CLAUDE.md` nennt ihn als Deploy-Pfad von N11-M10. Auf N02-M60 liegt eine alte Kopie des
-Gap-Prompts (`fork/RTX-TESLA-GAPS-PROMPT.md`).
-
-## Offene Entscheidungen
-1. Welcher Klon ist kanonisch, und wie werden die Historien zusammengeführt und gepusht? Vorschlag: `origin/main` (`9077a63`) als
-   Basis, N02-M60 zuerst pushen (reiner Fast-Forward, enthält den Merge von origin), dann N04-RTX mit `git merge origin/main`
-   (erwartete Konflikte nur in `worker-rtx/docker-compose.yml` und `worker-rtx/.env.m60`; dort gilt der Live-Stand), dann N11-M10 und
-   Steuerhost per `git pull --ff-only`. Vor und nach jedem Merge `docker compose config` auf dem Host vergleichen.
-2. `OLLAMA_GPU_AUTODETECT` auf N02-M60: kann auf 0 (die Pipeline ist ausdrücklich aus); danach N02-M60 neu messen.
-3. N11-Vorlagen `fork/compose/.env` und `.env.tesla` (N04-Design): übernehmen, korrigieren oder verwerfen.
-4. Soll `llm-studio/worker-tesla/docker-compose.yml` versioniert werden?
-5. Backups per `.gitignore` ausnehmen? Den alten Klon `tesla/ollama-legacy-gpu/` auf N11-M10 archivieren (dann die `CLAUDE.md` anpassen)?
+## Offene Entscheidung
+`OLLAMA_GPU_AUTODETECT` auf N02-M60: kann auf 0 gestellt werden (die Pipeline ist ausdrücklich aus); danach N02-M60 neu messen.
