@@ -122,7 +122,7 @@ jobs:
             JOBS=4
           tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}-native
           cache-from: type=gha,scope=${{ env.BONSAI == 'ON' && 'bonsai' || 'plain' }}-${{ matrix.variant }}-v2
-          cache-to: type=gha,scope=${{ env.BONSAI == 'ON' && 'bonsai' || 'plain' }}-${{ matrix.variant }}-v2,mode=max
+          cache-to: type=gha,scope=${{ env.BONSAI == 'ON' && 'bonsai' || 'plain' }}-${{ matrix.variant }}-v2,mode=max,ignore-error=true
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -140,7 +140,7 @@ jobs:
             BONSAI_IMAGE=${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
           cache-from: type=gha,scope=maxwell-spark-compat-v1
-          cache-to: type=gha,scope=maxwell-spark-compat-v1,mode=max
+          cache-to: type=gha,scope=maxwell-spark-compat-v1,mode=max,ignore-error=true
       - name: Record exact candidate digest
         env:
           DIGEST: ${{ steps.compat.outputs.digest || steps.build.outputs.digest }}
