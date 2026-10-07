@@ -25,7 +25,7 @@ ARG LLAMA_CPP_FORK=""
 # ── Stage 1: Build toolchain ──────────────────────────────────────────────────
 FROM nvidia/cuda:${CUDA13_VERSION}-devel-ubuntu22.04 AS builder
 
-ARG OLLAMA_VERSION=main
+ARG OLLAMA_VERSION=v0.40.0
 ARG BONSAI=OFF
 ARG CUDA_ARCHITECTURES="75-real;86-real"
 ARG JOBS=8

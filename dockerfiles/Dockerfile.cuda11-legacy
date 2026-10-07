@@ -33,7 +33,7 @@ ARG LLAMA_CPP_FORK=""
 # both Cooperlake (-mavx512bf16) and Alderlake (-mavxvnni) CPU backend targets.
 FROM nvidia/cuda:${CUDA11_VERSION}-devel-ubuntu22.04 AS builder
 
-ARG OLLAMA_VERSION=main
+ARG OLLAMA_VERSION=v0.40.0
 ARG BONSAI=OFF
 ARG CUDA_ARCHITECTURES="37-virtual;50-virtual;52-virtual"
 ARG JOBS=8

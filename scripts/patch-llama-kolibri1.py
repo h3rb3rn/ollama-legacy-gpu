@@ -2,7 +2,7 @@
 """
 patch-llama-kolibri1.py — adds the `kolibri1` architecture (Aleph Alpha Kolibri-1, 78B MoE) to llama.cpp.
 
-Upstream llama.cpp b11232 answers `unknown model architecture: 'kolibri1'`. The runtime part (src/) of the patch
+Upstream llama.cpp (b11232 up to b11351) answers `unknown model architecture: 'kolibri1'`. The runtime part (src/) of the patch
 published with Hob-forge/Kolibri-1-GGUF (MIT, author Seraphiel102) is kept in patches/kolibri1/kolibri1-llama.cpp.patch:
 new gating mode SIGMOID_LOGIT_ADD (select top-k on logits + expert bias, weight by the unbiased sigmoid), the model graph
 src/models/kolibri1.cpp (sliding-window 4:1 pattern, sandwich norms, shared expert) and the `kolibri1` tokenizer type.

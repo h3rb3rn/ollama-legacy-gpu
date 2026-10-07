@@ -4,10 +4,12 @@ Ollama runtime and Docker builds for NVIDIA legacy and current GPUs (Maxwell to 
 with optional native integration of the [Prism Bonsai demo](https://github.com/PrismML-Eng/Bonsai-demo)
 and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf).
 
-## Status (2026-10-05)
+## Status (2026-10-07)
 
-The build is based on **Ollama v0.35.1** (llama.cpp b11232) with `BONSAI=OFF` by default. The image
-`ollama-gaps:pipefix-20261005` (N02-M60: `ollama-gaps:kolibri-20261006`) serves `qwen3.6:35b` (35.5B, Q4_K_M) on the `:11434` instances of three hosts with a
+The build is based on **Ollama v0.40.0** (llama.cpp b11351) with `BONSAI=OFF` by default; the patches apply unchanged and perform
+like the previous base (A/B on N02-M60, see [docs/TUNING.md](docs/TUNING.md)). `ollama-gaps:v040-20261007` serves the Tesla instances of N04-RTX
+(`:11436` 4× M10, `:11442` 2× M60). The `:11434` instances of N04-RTX, N02-M60 and N11-M10 still run the Ollama 0.35.1 images
+(`ollama-gaps:pipefix-20261005`, `ollama-gaps:kolibri-20261006`); they serve `qwen3.6:35b` (35.5B, Q4_K_M) with a
 **262144-token context, q4_0 KV cache and all 42 layers on the GPUs**. Weights, KV cache and compute buffers live in VRAM; only
 small pinned staging buffers stay in host memory.
 
@@ -16,6 +18,8 @@ small pinned staging buffers stay in host memory.
 | N04-RTX | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 512 | on | 42.3 tok/s | ~1150 tok/s | 1029 MiB |
 | N02-M60 | 12× Tesla M60 (8 GiB), one instance | 64 | off | 10.4 tok/s (`qwen3.6:35b`, 12 GPUs); Kolibri-1 11.1 tok/s (8 GPUs) | 65–69 tok/s | – |
 | N11-M10 | 4× Tesla M10 (8 GiB) | 64 | off | 9.3 tok/s | ~24 tok/s | 32.8 MiB |
+| N04-RTX `:11436` (v0.40.0) | 4× Tesla M10 (8 GiB) | 64 | off | 8.7–9.0 tok/s | ~32 tok/s | 32.8 MiB |
+| N04-RTX `:11442` (v0.40.0) | 2× Tesla M60 (8 GiB), context 32768 | 1024 (default) | off | 13.1 tok/s (`qwen3.5:9b`), 29.6–32.5 tok/s (`llama-guard3:8b`) | 166–228 tok/s | 80 MiB |
 
 - [What the fork does differently from stock](docs/FORK-VS-STOCK.md) – patches, scripts, per-image patch matrix, environment variables.
 - [Tuning and measurements](docs/TUNING.md) – batch size, pipeline parallelism, host buffers, quality check, prompt lengths.
@@ -115,7 +119,7 @@ Sources: [NVIDIA legacy compute capabilities](https://developer.nvidia.com/cuda/
 The demo's NVIDIA path uses Prism llama.cpp; its separate MLX path targets
 Apple Silicon. This fork integrates the NVIDIA backend into ordinary Ollama
 APIs, without launching the demo's standalone server. `BONSAI=ON` builds it; the default is `BONSAI=OFF`. The pinned Prism tree
-does not accept the compat patch `002-clef.patch` of Ollama 0.35.1, so `BONSAI=ON` currently applies to the pinned release only.
+does not accept the compat patch `002-clef.patch` of Ollama 0.35.1 (not re-tested on 0.40.0, which changed that patch), so `BONSAI=ON` currently applies to the pinned release only. The v0.40.0 images do not serve Bonsai models (`bonsai2:27b-pq2_0` returns HTTP 500).
 
 - `BONSAI=ON` replaces the complete native backend with checksum-verified Prism
   commit `adfffbe41b2cabcd51fff326ab045662265062bb` from
@@ -173,7 +177,7 @@ Build the image for mixed Maxwell and RTX hosts (as deployed):
 
 ```bash
 docker build -f dockerfiles/Dockerfile.cuda12-maxwell \
-  --build-arg OLLAMA_VERSION=v0.35.1 --build-arg BONSAI=OFF \
+  --build-arg OLLAMA_VERSION=v0.40.0 --build-arg BONSAI=OFF \
   --build-arg 'CUDA_ARCHITECTURES=50-real;52-real;61-real;75-real;86-real' \
   --build-arg GGML_CUDA_FA=ON --build-arg JOBS=5 \
   -t ollama-gaps:local .

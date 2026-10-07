@@ -1,6 +1,6 @@
 # Fork vs. stock Ollama
 
-As of: 2026-10-07. Basis: Ollama v0.35.1, llama.cpp b11232 (pulled in via FetchContent). The fork is **not a source fork in the
+As of: 2026-10-07. Basis: Ollama v0.40.0, llama.cpp b11351 (pulled in via FetchContent; the patches also apply to v0.35.1 / b11232). The fork is **not a source fork in the
 Git sense**: the Docker build fetches the official Ollama tag and applies Python patch scripts from `scripts/` to the Go and
 llama.cpp sources. Every script is idempotent and aborts the build (fail closed) if the expected anchor is not found exactly
 once in the upstream code.
@@ -9,7 +9,7 @@ once in the upstream code.
 
 | Topic | Stock Ollama | Fork |
 | --- | --- | --- |
-| GPU targets | v0.35.1 CUDA 12 build (`llama/server/CMakePresets.json`): `50-virtual;52-virtual;60;61;70;75;80;86;89;90;90a;100;120`, i.e. Maxwell only as PTX (JIT on first start); CUDA 13 build: CC 75 and newer | native CUBINs (`-real`) for CC 5.0–9.0 in one image (no PTX JIT delay), CUDA 12.0.1 base; CUDA 11 image for K80 |
+| GPU targets | v0.35.1 and v0.40.0 CUDA 12 build (`llama/server/CMakePresets.json`): `50-virtual;52-virtual;60;61;70;75;80;86;89;90;90a;100;120`, i.e. Maxwell only as PTX (JIT on first start); CUDA 13 build: CC 75 and newer | native CUBINs (`-real`) for CC 5.0–9.0 in one image (no PTX JIT delay), CUDA 12.0.1 base; CUDA 11 image for K80 |
 | Flash Attention | global on/off after detection | per tier: only if all participating GPUs support it |
 | GPU selection | Ollama scheduler | dynamic pool (fast GPUs first, legacy GPUs only when needed) |
 | Batch size | computed internally (measured `-b 2048`), `OLLAMA_MAX_BATCH_SIZE` has no effect | `OLLAMA_MAX_BATCH_SIZE` is honored |

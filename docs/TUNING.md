@@ -1,5 +1,8 @@
 # Tuning and measurements (as of 2026-10-07)
 
+The measurements below were taken on Ollama 0.35.1 / llama.cpp b11232 unless a section says v0.40.0 (llama.cpp b11351); see
+[Ollama v0.40.0](#ollama-v0400-llamacpp-b11351) for the comparison of both bases.
+
 Model `qwen3.6:35b` (Q4_K_M), context 262144, KV cache q4_0, Flash Attention on, `LLAMA_ARG_FIT_TARGET=256`,
 Ollama 0.35.1 with the patches of this repository. Measurements use `scripts/bench-throughput.sh`: decode with the prompt
 "Write a long story about a robot." (120 tokens, `temperature 0`, `seed 1`), prefill with ~2500 words (unique per run),
@@ -190,6 +193,64 @@ the test user).
 
 Functional check (image `kolibri-20261006`): German fluent; reasoning arithmetic correct (80); tool call `get_weather` with `{"city": "Heidelberg"}`.
 With `think: false` the reasoning ends up in `content` instead of `thinking`; with `think: true` it is separated (not investigated further).
+
+## Ollama v0.40.0 (llama.cpp b11351)
+
+**What changed upstream between 0.35.1 and 0.40.0** (26 commits, 206 files): MLX is the default on Apple Silicon (`mlxrunner`, decision
+models on MLX), OpenAI-compatible tool-message fixes, multimodal embeddings, the llama.cpp bump b11232 → b11351 (119 upstream commits:
+CUDA fixes for sm70/Volta, `llama_batch_ext` migration including speculative decoding, new models such as GLM-5.3-Flash; no Kolibri-1),
+a changed `002-clef.patch` and a **manifest migration** (`manifests-v2`, `metadata`, package `compatmigrate`: Ollama-format models are
+converted to llama.cpp-compatible manifest-list children in the background; the first load still uses the compat patch). The scheduler,
+`envconfig`, GPU discovery and fit files are unchanged, so the Go patches of this repository apply as before. All patch scripts apply to
+v0.40.0 (CI builds of all three variants succeed; the scripts fail closed).
+
+**A/B on N02-M60, GPU 0–3** (4× Tesla M60, deployed configuration: batch 64, pipeline off, `FIT_TARGET` 256, MTP off, context 262144,
+q4_0, `qwen3.6:35b`; the two images alternate, three decode runs each; `docs/evidence/n04-n02-v040-2026-10-07/n02-ab-deployed-vs-v040.jsonl`):
+
+| Image | Round | Decode (tok/s) | Prefill (tok/s) | Load | Layers / batch / host buffer |
+|---|---|---|---|---|---|
+| deployed (Ollama 0.35.1, `kolibri-20261006`) | 1 | 13.2 / 13.9 / 15.0 | 84.4 | 142 s | 42/42, 64, 32.8 MiB |
+| v0.40.0 (CI candidate `a513b46`) | 1 | 13.3 / 13.6 / 14.8 | 84.6 | 142 s | 42/42, 64, 32.8 MiB |
+| deployed (0.35.1) | 2 | 13.1 / 14.9 / 15.8 | 84.9 | 141 s | 42/42, 64, 32.8 MiB |
+| v0.40.0 | 2 | 13.3 / 15.0 / 15.3 | 85.2 | 141 s | 42/42, 64, 32.8 MiB |
+
+Equal within the noise. `gpu-detect.sh`, the entrypoint, the proxy and `auto-optimize.py` are byte-identical in both images; the CI image
+builds ten CUDA architectures (`libggml-cuda.so` 988 MB) instead of five (441 MB), which does not change the throughput.
+
+**N04-RTX replicas with the untuned production environment** (the environment of the former `ollama-tesla-bonsai` / `ollama-m60-guard`:
+no batch setting, no `FIT_TARGET`, `OLLAMA_DRAFT_NUM_PREDICT` unset; replicas on other ports, same GPUs; raw data in `docs/evidence/n04-n02-v040-2026-10-07/`):
+
+| Replica | Model | Previous image (Ollama 0.34-era Bonsai build) | v0.40.0 candidate |
+|---|---|---|---|
+| 4× M10, context 190000 | `qwen3.5:9b` | 3.4 tok/s, 33/34 layers | 4.0–4.1 tok/s, 34/34 |
+| 4× M10 | `qwen3.6:35b` | HTTP 500 (2 CUDA errors) | 2.2–2.7 tok/s, 42/42, MTP active |
+| 4× M10 | `sovereign-judge-olmo31-32b` | 0.9–1.0 tok/s | 0.6–0.8 tok/s |
+| 4× M10 | `bonsai2:27b-pq2_0` | 0.7–0.8 tok/s | HTTP 500 (expected: needs the Bonsai build) |
+| 2× M60, context 32768 | `llama-guard3:8b` | 25.9 / 31.2 tok/s | 26.5 / 31.1 tok/s |
+| 2× M60 | `qwen3.5:9b` | 12.9 / 11.9 tok/s | 12.8 / 12.6 tok/s |
+| 2× M60 | `moe-sovereign-planner-9b` | 12.5 / 12.3 tok/s | 13.0 / 13.0 tok/s |
+
+Single runs on a host with 4 vCPUs and high base load. The low M10 numbers are a configuration effect (batch 512/2048, MTP active) and the
+host, not the Ollama version; with the tuned configuration below the same hardware reaches the N11-M10 level.
+
+**N04-RTX deployed with v0.40.0 and the tuned configuration** (`ollama-m10` on `:11436`, `ollama-m60-guard` on `:11442`, image
+`ollama-gaps:v040-20261007`, built locally with the architectures `50;52;61;75;86`):
+
+| Instance | Model | Decode (tok/s) | Prefill (tok/s) | Load | Layers / context / batch | CUDA errors |
+|---|---|---|---|---|---|---|
+| `:11436`, 4× M10 | `qwen3.6:35b` | 9.0 / 8.9 / 8.7 | 31.6 | 123 s | 42/42, 262144, 64 | 0 |
+| `:11442`, 2× M60 | `llama-guard3:8b` | 29.6 / 32.5 / 32.1 | 228 | 29 s | 33/33, 32768, 1024 | 0 |
+| `:11442`, 2× M60 | `qwen3.5:9b` | 13.1 / 13.2 / 13.2 | 167 | 35 s | 34/34, 32768, 1024 | 0 |
+
+For reference N11-M10 (also 4× M10, Ollama 0.35.1): 9.3 tok/s decode and 24.2 tok/s prefill.
+
+**Model store and the manifest migration.** v0.40.0 creates `manifests-v2` and `metadata` next to the legacy `manifests` directory and
+converts Ollama-format models in the background (disk estimate: converted size + 25 % + 512 MiB). The N04 containers share
+`/opt/ollama/models` with other Ollama versions, so the two v0.40.0 instances mount `blobs` and the legacy `manifests` read-only and write
+to a private directory (`/opt/ollama/models/n04-v040`, `…/n04-v040-guard`). With a read-only store the models load and run through the
+compat path (see the results above); the background conversion does not happen, and models cannot be pulled or created through these instances.
+`/opt` is a separate 916 GB disk on N04 (285 GB free); the 23 GB free are the Docker root file system. Whether the conversion with a
+writable store changes the layout in a way that older versions cannot read was not tested.
 
 ## Further findings
 
