@@ -176,10 +176,12 @@ ersetzt den Fit für jedes Modell der Instanz (andere Modelle nicht mit Greedy-F
 | 73 159 | 42,3 | 4,6 | 29 min | 2/2 | 7 314 MiB |
 | 147 213 | 31,7 | 3,7 | 78 min | 2/2 | 7 314 MiB |
 | 221 383 | 25,2 | 3,0 | 148 min | 2/2 | 7 314 MiB |
+| 250 112 | 23,3 | 2,7 | 180 min | 2/2 | 7 314 MiB |
 
 Der VRAM wächst mit der Prompt-Länge nicht (KV-Cache und Compute-Puffer sind bei `-c 262144` vorab belegt); die Temperatur blieb ≤ 59 °C.
-Decode fällt von 11 auf 3 tok/s, Prefill von 69 auf 25 tok/s. Ein erster Lauf mit „245k“ war ungültig: der Prompt hatte etwa 282k Token, wurde
-auf 131 074 Token gekürzt und die erste Nadel ging verloren.
+Decode fällt von 11 auf 2,7 tok/s, Prefill von 69 auf 23 tok/s. Ein erster Lauf mit „245k“ war ungültig: der Prompt hatte etwa 282k Token, wurde
+auf 131 074 Token gekürzt und die erste Nadel ging verloren; die Wiederholung mit 250 112 Token (rund 95 % des Fensters) besteht.
+Rohdaten und Treiberskript: `docs/evidence/kolibri-n02-2026-10-07/`.
 
 **Dauerlauf** (60 min, Greedy-Fill 8 GPUs, wechselnd Reasoning-Rechnen, Tool-Call und 1500-Wörter-Prompt, nacheinander):
 220 Anfragen, 0 Fehler, Decode min / Median / max 10,7 / 12,1 / 17,3 tok/s, längste Anfrage 50,7 s, VRAM je GPU konstant 7 314 MiB (Anfang = Ende),

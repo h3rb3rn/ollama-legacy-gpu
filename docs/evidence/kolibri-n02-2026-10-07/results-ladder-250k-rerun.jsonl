@@ -1,0 +1,1 @@
+{"test": "ladder", "target_tokens": 250000, "prompt_tokens": 250112, "prefill_tok_s": 23.3, "decode_tok_s": 2.7, "wall_s": 10786, "found": [true, true], "answer": "KOL-3756-BLAU, KOL-5797-ROT", "vram_max_mib": 7314, "temp_max": 59, "ts": "2026-10-07T10:59:19"}
