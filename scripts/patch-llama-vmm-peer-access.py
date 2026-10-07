@@ -4,11 +4,11 @@ patch-llama-vmm-peer-access.py — keeps the CUDA VMM pool usable with more than
 
 ggml_cuda_pool_vmm::alloc grants cuMemSetAccess to every peer-accessible device whenever `use_peer_access` is true.
 In builds with GGML_USE_NCCL (all our images ship libnccl) the flag is forced to true. CUDA allows at most eight peer
-mappings per allocation, so with nine or more visible GPUs the first pool allocation fails with
+mappings per allocation, so with more than nine visible GPUs the first pool allocation fails with
 `CUDA error: peer mapping resources exhausted` (CUDA_ERROR_TOO_MANY_PEERS) and the llama-server aborts
-(12x Tesla M60 in one instance: fails with 9, 10 and 12 visible GPUs, works with 8).
+(12x Tesla M60 in one instance: fails with 12 visible GPUs, works with 8 and 9 unpatched).
 
-The patch forces peer access in NCCL builds only up to eight devices. Beyond that the pool grants access to the owning
+The patch forces peer access in NCCL builds only up to eight devices (conservative: nine devices also work unpatched). Beyond that the pool grants access to the owning
 device only (the layer split does not read pool memory across devices). An explicit GGML_CUDA_P2P keeps its meaning.
 Up to eight GPUs nothing changes.
 """

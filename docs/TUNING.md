@@ -113,52 +113,81 @@ Gleiches Image, Kontext 262144, Batch 512, Pipeline an, gleiches Skript:
 Mit drei GPUs ist der Decode etwa 4 % höher (eine Pipeline-Stufe weniger; nicht geprüft). Der Kontext ist vorab reserviert und
 wächst nicht. Die vierte RTX-3060 ist für andere Aufgaben frei.
 
-## Mehr als 8 GPUs in einer Instanz (N02-M60, 12× Tesla M60)
+## Mehr als 9 GPUs in einer Instanz (N02-M60, 12× Tesla M60)
 
-Test: eine Instanz mit `qwen3.6:35b` (Kontext 262144, q4_0, Batch 64, `LLAMA_PIPELINE_PARALLEL=0`), die Anzahl sichtbarer GPUs über
-`CUDA_VISIBLE_DEVICES` gesteuert (die Container-Compose reicht stets alle 12 Karten durch, das Discovery-Log meldet deshalb immer 12).
+Die Container bekommen nur die jeweils getesteten Karten (`--gpus device=<UUIDs>` und passendes `CUDA_VISIBLE_DEVICES`); Ollama 0.35.1,
+Kontext 262144, q4_0, Batch 64, `LLAMA_PIPELINE_PARALLEL=0`. Ein erster Versuch, der nur `CUDA_VISIBLE_DEVICES` verkleinerte, aber alle
+12 Karten in den Container reichte, war ungültig (der Runner sah weiter alle 12) und ist nicht verwertet.
 
-| Image | Sichtbare GPUs | Ergebnis |
-|---|---|---|
-| `pipefix-20261005` (ohne Patch) | 9 | `CUDA error: peer mapping resources exhausted` beim ersten Laden |
-| `pipefix-20261005` (ohne Patch) | 10 | derselbe Fehler |
-| `pipefix-20261005` (ohne Patch) | 12 | derselbe Fehler (`cuMemSetAccess` in `ggml_cuda_pool_vmm::alloc`, `ggml-cuda.cu:635`) |
-| `vmmpeer-20261006` (mit `patch-llama-vmm-peer-access.py`) | 12 | lädt in 124 s, 42/42 Layer, 12 GPUs mit Last, 10,4 tok/s Decode |
+| Image | Modell | GPUs im Container | Ergebnis |
+|---|---|---|---|
+| `pipefix-20261005` (ohne Patch) | `qwen3.6:35b` | 8 | läuft, 11,2–11,5 tok/s Decode |
+| `pipefix-20261005` (ohne Patch) | `qwen3.6:35b` | 9 | läuft, 10,7–10,8 tok/s Decode |
+| `pipefix-20261005` (ohne Patch) | `qwen3.6:35b` | 12 | `CUDA error: peer mapping resources exhausted` beim ersten Laden (`cuMemSetAccess` in `ggml_cuda_pool_vmm::alloc`, `ggml-cuda.cu:635`) |
+| `vmmpeer-20261006` (mit `patch-llama-vmm-peer-access.py`) | `qwen3.6:35b` | 12 | läuft, 10,4 tok/s |
+| `kolibri-20261006` (mit Patch) | Kolibri-1 | 8, 9, 10, 11, 12 | läuft, Werte unten |
 
-Nicht gemessen: genau 8 sichtbare GPUs ohne Patch (die Grenze 8 folgt aus dem CUDA-Limit von 8 Peers je Mapping, nicht aus einer Messung).
+Nicht gemessen: 10 und 11 GPUs ohne Patch (Kolibri-1 lädt im Image ohne Kolibri-Patch nicht; mit Qwen nicht wiederholt).
 
 **Ursache:** `libggml-cuda.so` ist gegen NCCL gelinkt (`libnccl.so.2` in `ldd`), dadurch ist `use_peer_access` in `ggml_cuda_pool_vmm::alloc`
-immer wahr und `cuMemSetAccess` bekommt Zugriffsdeskriptoren für alle sichtbaren Geräte. CUDA erlaubt höchstens 8 Peers je Mapping
-(`CUDA_ERROR_TOO_MANY_PEERS`). Der Patch erzwingt den Peer-Zugriff nur bis 8 Geräte; darüber erhält nur das besitzende Gerät Zugriff.
+immer wahr und `cuMemSetAccess` bekommt Zugriffsdeskriptoren für alle sichtbaren Geräte. CUDA erlaubt höchstens 8 Peers je Mapping, also
+ein Gerät plus 8 Peers = 9 GPUs. Der Patch erzwingt den Peer-Zugriff nur bis 8 Geräte; das ist vorsichtig gewählt, denn 9 GPUs laufen auch
+ohne Patch. Darüber erhält nur das besitzende Gerät Zugriff.
 
-`qwen3.6:35b` ist auf allen 12 GPUs mit 10,4 tok/s langsamer als auf dem 4-GPU-Pool (15,0–16,0 tok/s): mehr Stufen, kein Gewinn bei einem
-Modell, das in vier Karten passt.
+`qwen3.6:35b` ist auf 12 GPUs mit 10,4 tok/s langsamer als auf dem 4-GPU-Pool (13,9–14,8 tok/s in dieser Messreihe, 15,0–16,0 tok/s im
+Dauerbetrieb des Pools): mehr Stufen, kein Gewinn bei einem Modell, das in vier Karten passt.
 
-## Kolibri-1 und GPU-Reduktion (N02-M60)
+## Kolibri-1 auf N02-M60
 
-`hf.co/Hob-forge/Kolibri-1-GGUF:Q4_K_M`: Architektur `kolibri1`, 78,1B Parameter (384 Experten, 6 aktiv), 47,5 GB, 51 Layer, Kontext 262144.
-Ohne `patch-llama-kolibri1.py` bricht das Laden mit `unknown model architecture: 'kolibri1'` ab. Image `kolibri-20261006`, Batch 64, q4_0.
+`hf.co/Hob-forge/Kolibri-1-GGUF:Q4_K_M`: Architektur `kolibri1`, 78,1B Parameter (384 Experten, 6 aktiv), 47,5 GB, 51 Layer, natives Kontextfenster
+262144 (GGUF `kolibri1.context_length`), vier von fünf Layern mit Sliding Window 513, jeder fünfte mit voller Attention ohne Positionskodierung.
+Ohne `patch-llama-kolibri1.py` bricht das Laden mit `unknown model architecture: 'kolibri1'` ab. Image `kolibri-20261006`, Batch 64, q4_0,
+`-c 262144`, alle 51 Layer im VRAM, nichts im RAM, Laden 253 s.
 
-| Prüfung | Ergebnis |
-|---|---|
-| Laden (12 GPUs, Fit mit Spread) | 51/51 Layer, `-c 262144`, 53,2 GB VRAM, nichts im RAM, 267 s |
-| Deutsch (drei Sätze zum blauen Himmel) | fließend; 10,4 tok/s Decode |
-| Rechnen mit Reasoning (Durchschnittsgeschwindigkeit) | richtig (80), 11,0 tok/s |
-| Tool-Call (`get_weather`, Heidelberg) | richtig, Argument `{"city": "Heidelberg"}` |
-| Nadel-Test (9421 Token Prompt) | Code gefunden, 56,8–58,5 tok/s Prefill, 10,9–11,8 tok/s Decode |
+**GPU-Zahl** (Decode: 120 Token, `temperature 0`; Prefill: 2500 Wörter; Fit mit Spread, außer letzte Zeile):
 
-Mit `think: false` landet der Gedankengang im `content` statt in `thinking`; mit `think: true` ist er getrennt (nicht weiter untersucht).
+| GPUs | VRAM gesamt | höchste GPU | Decode (tok/s) | Prefill (tok/s) |
+|---|---|---|---|---|
+| 8 | 51,8 GB | 7,5 GB | 11,1 / 10,9 | 68,9 |
+| 9 | 52,4 GB | 6,7 GB | 10,8 / 10,7 | 67,5 |
+| 10 | 53,1 GB | 6,7 GB | 10,7 / 10,5 | 66,6 |
+| 11 | 53,2 GB | 5,8 GB | 10,4 / 10,4 | 65,0 |
+| 12 | 53,3 GB | 5,8 GB | 10,5 / 10,4 | 65,0 |
+| 12 sichtbar, Greedy-Fill 1.10 (belegt 8) | 51,3 GB | 7,2 GB | 11,1 / 10,9 | 67,4 |
 
-**GPU-Reduktion** mit `OLLAMA_FORCE_GPU_LAYERS=1` (Greedy-Fill, hoechster CUDA-Index zuerst, nur so viele GPUs wie nötig):
+Jede zusätzliche GPU kostet etwa 0,1–0,2 tok/s Decode und 1–2 tok/s Prefill; ein CUDA-Fehler trat in keiner Konfiguration auf.
 
-| `OLLAMA_LAYER_OVERHEAD_SCALE` | GPUs mit Last | VRAM gesamt | höchste GPU | Decode | Ergebnis |
+**GPU-Reduktion** mit `OLLAMA_FORCE_GPU_LAYERS=1` (Greedy-Fill, höchster CUDA-Index zuerst, nur so viele GPUs wie nötig), 12 sichtbar:
+
+| `OLLAMA_LAYER_OVERHEAD_SCALE` | GPUs mit Last | VRAM gesamt | höchste GPU | Ergebnis |
+|---|---|---|---|---|
+| 1.10 | 8 | 51,3 GB | 7,2 GB | läuft, 11,1 / 10,9 tok/s; im Dauerlauf stabil (siehe unten) |
+| 1.03 | 7 | 50,9 GB | 8,1 GB | lädt, dann `CUDA error: out of memory` bei der ersten Anfrage, Neuladen (254 s je Versuch) |
+
+Mit 1.10 liegt die Reserve je Karte bei etwa 0,9 GB; 7 GPUs lassen keinen Platz für die Compute-Puffer einer Anfrage. `OLLAMA_FORCE_GPU_LAYERS`
+ersetzt den Fit für jedes Modell der Instanz (andere Modelle nicht mit Greedy-Fill gemessen).
+
+**Kontext-Leiter** (Produktionskonfiguration, Greedy-Fill 8 GPUs, zwei Nadeln bei 25 % und 80 % Tiefe, `temperature 0`, `think true`):
+
+| Prompt-Token | Prefill (tok/s) | Decode (tok/s) | Dauer | Nadeln gefunden | VRAM-Spitze je GPU |
 |---|---|---|---|---|---|
-| (aus, Fit mit Spread) | 12 | 53,2 GB | 5,8 GB | 10,4–12,5 tok/s | läuft |
-| 1.10 | 8 | 51,5 GB | 7,2 GB | 11,7–11,8 tok/s | läuft; Nadel-Test mit 9421 Token bestanden, kein CUDA-Fehler |
-| 1.03 | 7 | 50,9 GB | 8,1 GB | – | lädt, dann `CUDA error: out of memory` bei der ersten Anfrage, Neuladen (254 s je Versuch) |
+| 9 421 | 58,5 | 11,8 | 3 min | 1/1 | – |
+| 36 554 | 50,6 | 6,4 | 12,6 min | 2/2 | 7 314 MiB |
+| 73 159 | 42,3 | 4,6 | 29 min | 2/2 | 7 314 MiB |
+| 147 213 | 31,7 | 3,7 | 78 min | 2/2 | 7 314 MiB |
+| 221 383 | 25,2 | 3,0 | 148 min | 2/2 | 7 314 MiB |
 
-Mit 1.10 liegt die Reserve je Karte bei etwa 0,9 GB; 7 GPUs lassen keinen Platz für die Compute-Puffer einer Anfrage. Der Faktor gilt
-für diese Karten und dieses Modell; `OLLAMA_FORCE_GPU_LAYERS` ersetzt den Fit für jedes Modell der Instanz (andere Modelle nicht gemessen).
+Der VRAM wächst mit der Prompt-Länge nicht (KV-Cache und Compute-Puffer sind bei `-c 262144` vorab belegt); die Temperatur blieb ≤ 59 °C.
+Decode fällt von 11 auf 3 tok/s, Prefill von 69 auf 25 tok/s. Ein erster Lauf mit „245k“ war ungültig: der Prompt hatte etwa 282k Token, wurde
+auf 131 074 Token gekürzt und die erste Nadel ging verloren.
+
+**Dauerlauf** (60 min, Greedy-Fill 8 GPUs, wechselnd Reasoning-Rechnen, Tool-Call und 1500-Wörter-Prompt, nacheinander):
+220 Anfragen, 0 Fehler, Decode min / Median / max 10,7 / 12,1 / 17,3 tok/s, längste Anfrage 50,7 s, VRAM je GPU konstant 7 314 MiB (Anfang = Ende),
+Temperatur ≤ 55 °C, 0 CUDA-Fehler im Runner-Log. Xid-Meldungen des Treibers ließen sich nicht prüfen (`dmesg` und Kernel-Journal sind für
+den Benutzer nicht lesbar).
+
+Funktionsprüfung (Image `kolibri-20261006`): Deutsch fließend; Reasoning-Rechnen richtig (80); Tool-Call `get_weather` mit `{"city": "Heidelberg"}`.
+Mit `think: false` landet der Gedankengang im `content` statt in `thinking`; mit `think: true` ist er getrennt (nicht weiter untersucht).
 
 ## Weitere Befunde
 

@@ -22,7 +22,7 @@ einmal gefunden wird.
 | Fit (nextn-Slot) | zählt den Slot nur mit geladenem MTP; bei MTP aus bleibt Layer 0 auf der CPU (`41/42`) | zählt ihn immer mit (`42/42`) |
 | Pipeline-Parallelität (Multi-GPU) | automatisch, vierfache Eingabepuffer im Host-RAM | per `LLAMA_PIPELINE_PARALLEL=0` abschaltbar |
 | CUDA Graphs | auf Legacy-GPUs deaktiviert | per `GGML_CUDA_GRAPHS_LEGACY=1` zuschaltbar |
-| Mehr als 8 GPUs in einem Prozess | NCCL-Build erzwingt VMM-Peer-Zugriff auf alle Geräte; ab 9 GPUs `peer mapping resources exhausted` | Erzwingung nur bis 8 Geräte (`patch-llama-vmm-peer-access.py`); 12× Tesla M60 laufen in einer Instanz |
+| Mehr als 8 GPUs in einem Prozess | NCCL-Build erzwingt VMM-Peer-Zugriff auf alle Geräte; mit 12 GPUs `peer mapping resources exhausted` (9 laufen noch) | Erzwingung nur bis 8 Geräte (`patch-llama-vmm-peer-access.py`); 12× Tesla M60 laufen in einer Instanz |
 | Architektur `kolibri1` (Aleph Alpha Kolibri-1, 78B MoE) | `unknown model architecture: 'kolibri1'` | Architektur über `patches/kolibri1/` (`patch-llama-kolibri1.py`) |
 | Jinja `tojson` | Template-Fehler bei einigen Modellen | kompatibel |
 
@@ -56,7 +56,7 @@ llama.cpp:
 - `patch-llama-pipeline-parallel.py` – `LLAMA_PIPELINE_PARALLEL=0` überspringt
   die Pipeline-Parallelität; ohne Variable unverändert.
 - `patch-llama-vmm-peer-access.py` – `ggml_cuda_pool_vmm::alloc` erzwingt in NCCL-Builds die Peer-Freigabe nur bis 8 Geräte
-  (CUDA erlaubt 8 Peers je Mapping); mit 9–12 GPUs erhält nur das besitzende Gerät Zugriff.
+  (CUDA erlaubt 8 Peers je Mapping); mit mehr als 8 GPUs erhält nur das besitzende Gerät Zugriff.
 - `patch-llama-kolibri1.py` – spielt `patches/kolibri1/kolibri1-llama.cpp.patch` ein (Laufzeitteil des Patches aus
   `Hob-forge/Kolibri-1-GGUF`, MIT): Gating-Modus `SIGMOID_LOGIT_ADD`, Modellgraph, Tokenizer-Typ `kolibri1`. Ohne den Patch
   lädt kein Kolibri-1-GGUF. Das Skript berührt `src/CMakeLists.txt`, damit der `models/*.cpp`-Glob neu ausgewertet wird.
@@ -114,15 +114,4 @@ KV-Cache-Konfiguration (`OLLAMA_KV_CACHE_TYPE`, `OLLAMA_FLASH_ATTENTION`) ist wi
 bei Stock. Der Bonsai-Pfad (`BONSAI=ON`) ist optional und im aktuellen Default
 aus (`BONSAI=OFF`).
 
-## Weniger GPUs in einer Instanz (Greedy-Fill, gemessen)
-
-`Kolibri-1-Q4_K_M` (47,5 GB, 51 Layer, `-c 262144`, q4_0, Batch 64) auf N02-M60, alle 12 Tesla M60 (8 GiB) sichtbar,
-`OLLAMA_SCHED_SPREAD=true`, `LLAMA_PIPELINE_PARALLEL=0`. Der Greedy-Fill bestimmt die genutzten GPUs, die Instanz bleibt unverändert.
-
-| Einstellung | GPUs mit Last | VRAM gesamt | höchste GPU | Decode (tok/s) | Ergebnis |
-|---|---|---|---|---|---|
-| ohne `OLLAMA_FORCE_GPU_LAYERS` (Fit, Spread) | 12 | 53,2 GB | 5,8 GB | 10,4–12,5 | läuft |
-| `OLLAMA_FORCE_GPU_LAYERS=1`, `OLLAMA_LAYER_OVERHEAD_SCALE=1.10` | 8 | 51,5 GB | 7,2 GB | 11,7–11,8 | läuft, Nadel-Test mit 9421 Tokens bestanden |
-| `OLLAMA_FORCE_GPU_LAYERS=1`, `OLLAMA_LAYER_OVERHEAD_SCALE=1.03` | 7 | 50,9 GB | 8,1 GB | – | lädt, danach `CUDA error: out of memory` bei der ersten Anfrage |
-
-Der Faktor 1,10 ist die Grenze für diese Karten: 7 GPUs lassen für die Compute-Puffer der Anfrage keinen Platz.
+Messungen zu 8–12 GPUs, Greedy-Fill, Kontext-Leiter und Dauerlauf: [TUNING.md](TUNING.md).

@@ -14,7 +14,7 @@ small pinned staging buffers stay in host memory.
 | Host | GPUs in the pool | Batch | Pipeline parallelism | Decode | Prefill | Host buffer |
 | --- | --- | --- | --- | --- | --- | --- |
 | N04-RTX | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 512 | on | 42.3 tok/s | ~1150 tok/s | 1029 MiB |
-| N02-M60 | 12× Tesla M60 (8 GiB), one instance | 64 | off | 10.4 tok/s (`qwen3.6:35b`, 12 GPUs) | – | – |
+| N02-M60 | 12× Tesla M60 (8 GiB), one instance | 64 | off | 10.4 tok/s (`qwen3.6:35b`, 12 GPUs); Kolibri-1 11.1 tok/s (8 GPUs) | 65–69 tok/s | – |
 | N11-M10 | 4× Tesla M10 (8 GiB) | 64 | off | 9.3 tok/s | ~24 tok/s | 32.8 MiB |
 
 - [What the fork does differently from stock](docs/FORK-VS-STOCK.md) – patches, scripts, per-image patch matrix, environment variables.
@@ -51,15 +51,17 @@ runner log (`llama_context: n_batch`), not the env file; `scripts/bench-throughp
 
 Details, tables and limits: [docs/TUNING.md](docs/TUNING.md).
 
-### More than eight GPUs and Kolibri-1
+### More than nine GPUs and Kolibri-1
 
-- **Twelve GPUs in one instance:** NCCL builds forced peer access on every VMM pool allocation; CUDA allows 8 peers per mapping, so 9, 10 and
-  12 visible GPUs aborted with `peer mapping resources exhausted`. `patch-llama-vmm-peer-access.py` limits the forcing to eight devices;
-  12× Tesla M60 now load `qwen3.6:35b` in one instance (10.4 tok/s, slower than the 4-GPU pool's 15–16 tok/s).
-- **Kolibri-1** (`kolibri1`, 78.1B MoE): `patch-llama-kolibri1.py` adds the architecture. `Kolibri-1-Q4_K_M` runs with `-c 262144`, all 51
-  layers in VRAM (51.5 GB on 8 GPUs with `OLLAMA_FORCE_GPU_LAYERS=1`, scale `1.10`; 7 GPUs fail with CUDA out of memory), 11.7–11.8 tok/s decode.
+- **Twelve GPUs in one instance:** NCCL builds forced peer access on every VMM pool allocation; CUDA allows one device plus 8 peers per mapping,
+  so 12 visible GPUs aborted with `peer mapping resources exhausted` (8 and 9 GPUs run without the patch). `patch-llama-vmm-peer-access.py`
+  limits the forcing to eight devices; 12× Tesla M60 now load `qwen3.6:35b` in one instance (10.4 tok/s, slower than the 4-GPU pool).
+- **Kolibri-1** (`kolibri1`, 78.1B MoE, native context 262144): `patch-llama-kolibri1.py` adds the architecture. `Kolibri-1-Q4_K_M` runs with
+  `-c 262144`, all 51 layers in VRAM on 8 to 12 GPUs (10.4–11.1 tok/s decode, 65–69 tok/s prefill); with `OLLAMA_FORCE_GPU_LAYERS=1` and scale
+  `1.10` it uses 8 of 12 GPUs (7 run out of memory). Needle tests pass up to 221k prompt tokens (decode falls to 3 tok/s there); a 60-minute
+  soak (220 requests) ran without errors.
 
-Tables and limits: [docs/TUNING.md](docs/TUNING.md).
+Tables, context ladder and limits: [docs/TUNING.md](docs/TUNING.md).
 
 ## GPU compatibility
 
