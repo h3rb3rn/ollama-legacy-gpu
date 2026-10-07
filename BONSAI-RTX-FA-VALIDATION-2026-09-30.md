@@ -1,130 +1,130 @@
 # Bonsai RTX: CUDA Flash Attention
 
-## Implementierung und Umgebung
+## Implementation and environment
 
-`Dockerfile.cuda13-rtx` kompiliert mit `GGML_CUDA_FA=ON`, einschließlich
-quantisierter KV-Cache-Kernel. Die Bonsai-Matrix in GitHub Actions übergibt
-diesen Wert explizit für CUDA 13. CUDA-11/12-Defaults bleiben unverändert.
-`scripts/check-cuda-flash-attn.py` prüft die Fähigkeit des tatsächlich
-geladenen GGML-Backends über dessen C-API.
+`Dockerfile.cuda13-rtx` compiles with `GGML_CUDA_FA=ON`, including
+quantized KV cache kernels. The Bonsai matrix in GitHub Actions passes
+this value explicitly for CUDA 13. CUDA 11/12 defaults stay unchanged.
+`scripts/check-cuda-flash-attn.py` checks the capability of the GGML backend
+actually loaded, via its C API.
 
-Der CUDA-13-Build wurde auf N02-M60 erfolgreich erstellt; Inferenz und
-Deployment erfolgten auf N04-RTX, Port 11434. Ollama v0.34.1 und Prism
-`adfffbe41b2cabcd51fff326ab045662265062bb` sind gepinnt.
-Image: `ollama-bonsai:rtx-fa-cuda13-20260929`, Config-Digest
+The CUDA 13 build was built successfully on N02-M60; inference and
+deployment took place on N04-RTX, port 11434. Ollama v0.34.1 and Prism
+`adfffbe41b2cabcd51fff326ab045662265062bb` are pinned.
+Image: `ollama-bonsai:rtx-fa-cuda13-20260929`, config digest
 `sha256:0f70cfaf1aba9580de10dae33f20b8580895ac28c17e94232177f9a1f182a9c4`.
 
-Unveränderte Gerätezuweisung: zwei RTX 2060 und zwei RTX 3060 mit je 12 GB,
+Unchanged device assignment: two RTX 2060 and two RTX 3060 with 12 GB each,
 UUIDs `GPU-ed954d67-584b-f101-ae1e-5cd4df31cebc`,
 `GPU-6cf8a010-9ab8-f640-b5d4-b88540b220b7`,
 `GPU-6e62055a-46d4-e5e1-41d6-90efc6aa3dbb`,
 `GPU-63bfbd4b-9dd7-75ee-e025-d7c8966fcc42`.
-Gemeinsamer Mount: `/opt/ollama/models:/root/.ollama`.
-Die Produktionsinstanz `ollama-tesla-bonsai:11436` wurde nicht verändert.
+Shared mount: `/opt/ollama/models:/root/.ollama`.
+The production instance `ollama-tesla-bonsai:11436` was not modified.
 
-## Nachweis der Operationen
+## Proof of the operations
 
-| Prüfung | Altes CUDA-12-Image ohne FA | Neues CUDA-13-Image mit FA |
+| Check | Old CUDA 12 image without FA | New CUDA 13 image with FA |
 |---|---|---|
-| Backend-Fähigkeit F16 und Q4_0 auf vier RTX | 0/8 unterstützt | 8/8 unterstützt |
-| `FLASH_ATTN` im Scheduler-Trace | CPU | CUDA0 |
-| Anzahl protokollierter Zuordnungsproben | 336 | 336 |
+| Backend capability F16 and Q4_0 on four RTX | 0/8 supported | 8/8 supported |
+| `FLASH_ATTN` in the scheduler trace | CPU | CUDA0 |
+| Number of logged assignment probes | 336 | 336 |
 
-Die Traces verwenden denselben PQ2_0-Blob, dieselbe RTX 3060, 4096 Kontext,
-Q4-KV, Batch 128 und `-fa on`. Die 336 Proben stammen aus Graphaufbau,
-Warmup und Ausführung, nicht aus 336 Modell-Layern. Die Meldung `65/65`
-GPU-Layer allein hätte diesen Unterschied nicht aufgedeckt.
+The traces use the same PQ2_0 blob, the same RTX 3060, 4096 context,
+Q4 KV, batch 128 and `-fa on`. The 336 probes come from graph construction,
+warm-up and execution, not from 336 model layers. The message `65/65`
+GPU layers alone would not have revealed this difference.
 
-## Durchsatzvergleich
+## Throughput comparison
 
-Identischer Prompt: `List the integers from 1 to 200, separated by spaces.
-Do not explain.` Temperatur 0, Seed 42, 128 generierte Tokens, Batch 128,
-eine Anfrage gleichzeitig. Decode-Rate = Ollama `eval_count / eval_duration`.
-Ladezeit und Prompt-Verarbeitung sind nicht Bestandteil dieser Rate.
+Identical prompt: `List the integers from 1 to 200, separated by spaces.
+Do not explain.` Temperature 0, seed 42, 128 generated tokens, batch 128,
+one request at a time. Decode rate = Ollama `eval_count / eval_duration`.
+Load time and prompt processing are not part of this rate.
 
-| Kontextkapazität | Alt, Tokens/s | Neu, Tokens/s | Platzierung |
+| Context capacity | Old, tokens/s | New, tokens/s | Placement |
 |---|---:|---:|---|
-| 4096, Lauf 1 | 13,12 | 28,45 | jeweils eine RTX 3060 |
-| 4096, Lauf 2 | 12,84 | 28,88 | jeweils eine RTX 3060 |
+| 4096, run 1 | 13.12 | 28.45 | one RTX 3060 each |
+| 4096, run 2 | 12.84 | 28.88 | one RTX 3060 each |
 
-Nach Umstellung auf native Speicherplanung (aktuell deployte Konfiguration):
+After the switch to native memory planning (currently deployed configuration):
 
-| Kontextkapazität | Alt, Tokens/s (eine GPU) | Neu, Tokens/s (vier GPUs) |
+| Context capacity | Old, tokens/s (one GPU) | New, tokens/s (four GPUs) |
 |---|---:|---:|
-| 4096, Lauf 1 | 13,12 | 21,15 |
-| 4096, Lauf 2 | 12,84 | 21,76 |
-| 262144, Lauf 1 | 13,49 | 21,56 |
-| 262144, Lauf 2 | 13,38 | 21,49 |
+| 4096, run 1 | 13.12 | 21.15 |
+| 4096, run 2 | 12.84 | 21.76 |
+| 262144, run 1 | 13.49 | 21.56 |
+| 262144, run 2 | 13.38 | 21.49 |
 
-Bei maximaler Cache-Kapazität beträgt der Gewinn damit rund 60 Prozent.
-Die Verteilung auf vier GPUs reduziert den 4k-Decode gegenüber dem neuen
-Einzelkartenlauf; der Vergleich stützt keine Addition der GPU-Bandbreiten.
-Auch die vier Ausgaben der aktuell deployten Konfiguration sind bytegleich
-zu den jeweiligen Ausgangsläufen.
+At maximum cache capacity the gain is thus about 60 percent.
+Distribution over four GPUs reduces the 4k decode compared to the new
+single-card run; the comparison does not support adding up the GPU bandwidths.
+The four outputs of the currently deployed configuration are also byte-identical
+to the respective baseline runs.
 
-Die beiden 4k-Ausgaben sind bytegleich zum jeweiligen Ausgangslauf. Der neue
-4k-Lauf hat zwei Graph-Splits und 10,08 MiB CUDA-Host-Rechenpuffer. Die Änderung
-umfasst CUDA-Version und FA-Build gemeinsam; der Geschwindigkeitsfaktor ist
-ein Vergleich der Images, keine isolierte Zeitmessung einzelner FA-Kernel.
-Die Ausgangsläufe wurden am Vortag aufgenommen. Frühere Werte um 1,8 Tokens/s
-wurden bei der kontrollierten Ausgangsmessung nicht reproduziert.
+The two 4k outputs are byte-identical to the respective baseline run. The new
+4k run has two graph splits and 10.08 MiB of CUDA host compute buffer. The change
+covers CUDA version and FA build together; the speed factor is
+a comparison of the images, not an isolated timing of individual FA kernels.
+The baseline runs were recorded the day before. Earlier values around 1.8 tokens/s
+were not reproduced in the controlled baseline measurement.
 
-## Befund bei 262144 Kontextplätzen
+## Finding at 262144 context slots
 
-Der erste Versuch mit der bisherigen Platzierungsheuristik schlug mit CUDA
-OOM fehl. Sie erzwingt `OLLAMA_LAYER_OVERHEAD_SCALE=1.1` und legt alle Gewichte
-auf eine RTX 3060. Tatsächlich werden 6539,67 MiB Gewichte, 4608 MiB Q4-KV,
-149,62 MiB rekurrenter Zustand und bis zu 1313,58 MiB Rechenpuffer benötigt.
-Diese Kombination passt nicht auf die gewählte Karte. Der zusätzliche
-CUDA-Puffer war im bisherigen CPU-Fallback nicht dort angefallen.
+The first attempt with the previous placement heuristic failed with CUDA
+OOM. It forces `OLLAMA_LAYER_OVERHEAD_SCALE=1.1` and places all weights
+on one RTX 3060. In fact 6539.67 MiB of weights, 4608 MiB of Q4 KV,
+149.62 MiB of recurrent state and up to 1313.58 MiB of compute buffer are needed.
+This combination does not fit on the chosen card. The additional
+CUDA buffer had not accrued there in the previous CPU fallback.
 
-Die anschließende Validierung verwendet daher die native Speicherplanung:
-GPU-Autodetektion und erzwungene Greedy-Platzierung sind für diese dedizierte
-RTX-Instanz deaktiviert, die vier GPU-UUIDs bleiben explizit zugewiesen.
-Die wiederholten 256k-Anfragen liefen erfolgreich durch. Pro Karte wurden
-1152 MiB Q4-KV und 1313,58–1323,58 MiB Rechenpuffer reserviert; alle 65 Layer
-liegen auf GPU. Der Graph hat sechs Splits. Die reproduzierbare Konfiguration
-steht in [docker-compose.n04-bonsai-rtx.yml](compose/docker-compose.n04-bonsai-rtx.yml).
+The subsequent validation therefore uses native memory planning:
+GPU autodetection and forced greedy placement are disabled for this dedicated
+RTX instance; the four GPU UUIDs stay explicitly assigned.
+The repeated 256k requests ran through successfully. Per card, 1152 MiB of Q4 KV
+and 1313.58–1323.58 MiB of compute buffer were reserved; all 65 layers
+are on the GPU. The graph has six splits. The reproducible configuration
+is in [docker-compose.n04-bonsai-rtx.yml](compose/docker-compose.n04-bonsai-rtx.yml).
 
-Diese Durchsatzläufe prüfen volle Cache-Kapazität mit kurzen Prompts, keine
-262144 bereits belegten Kontextplätze. Ergänzende Stabilitätsläufe mit
-derselben Kapazität sind ebenfalls abgeschlossen:
+These throughput runs check full cache capacity with short prompts, not
+262144 already occupied context slots. Supplementary stability runs with
+the same capacity are also complete:
 
-| Anfrage | Prompt-Tokens | Generierte Tokens | Decode Tokens/s | Ergebnis |
+| Request | Prompt tokens | Generated tokens | Decode tokens/s | Result |
 |---|---:|---:|---:|---|
-| 19 × 23 | 66 | 46 | 23,42 | korrekt: 437 |
-| Farb-Padding und Frage nach Frankreichs Hauptstadt | 8268 | 55 | 20,75 | korrekt: Paris |
-| Längerer Sortieralgorithmen-Text | 77 | 2048 | 20,80 | Tokenlimit regulär erreicht |
+| 19 × 23 | 66 | 46 | 23.42 | correct: 437 |
+| Color padding and question about the capital of France | 8268 | 55 | 20.75 | correct: Paris |
+| Longer sorting-algorithm text | 77 | 2048 | 20.80 | token limit reached as expected |
 
-Der 8268-Token-Prompt wurde mit 310,69 Tokens/s verarbeitet. Die lange
-Ausgabe dauerte insgesamt 101,36 Sekunden; sie prüft den anhaltenden Decode,
-nicht die fachliche Korrektheit eines vollständigen Tutorials. Keine dieser
-Anfragen führte zu OOM, Runner-Abbruch oder Container-Neustart. Dies ist ein
-begrenzter Stabilitätstest, kein Dauertest mit vollständig belegtem 256k-KV.
+The 8268-token prompt was processed at 310.69 tokens/s. The long
+output took 101.36 seconds in total; it tests sustained decode,
+not the technical correctness of a complete tutorial. None of these
+requests led to OOM, runner abort or container restart. This is a
+limited stability test, not a long-duration test with a fully occupied 256k KV.
 
-Abschließend ist `ollama:11434` gesund und hat null Neustarts. ID, Startzeit
-(`2026-09-28T20:19:28.11938137Z`) und Neustartzähler (0) der geschützten
-Produktionsinstanz `11436` sind unverändert. Das Modell wurde nach den Tests
-entladen und kann bei der nächsten Anfrage erneut geladen werden. Der alte
-RTX-Container bleibt gestoppt als `ollama-rtx-pre-fa-20260929` für Rollback.
+Finally, `ollama:11434` is healthy and has zero restarts. ID, start time
+(`2026-09-28T20:19:28.11938137Z`) and restart counter (0) of the protected
+production instance `11436` are unchanged. The model was unloaded after the tests
+and can be loaded again on the next request. The old
+RTX container stays stopped as `ollama-rtx-pre-fa-20260929` for rollback.
 
-Die Prüfung der Modellpfade unter `/tmp`, `/opt/ollama` und `/opt/deployment`
-auf N04 fand nur die vorhandene 7206168928-Byte-Bonsai-Datei im gemeinsamen
-Blob-Store. Für diese Validierung wurden keine Gewichte heruntergeladen
-oder kopiert. Auf N02 lagen in den geprüften Pfaden keine Bonsai-GGUF-Dateien.
+The check of the model paths under `/tmp`, `/opt/ollama` and `/opt/deployment`
+on N04 found only the existing 7206168928-byte Bonsai file in the shared
+blob store. No weights were downloaded or copied for this validation.
+On N02 no Bonsai GGUF files were found in the checked paths.
 
-## Artefakte
+## Artifacts
 
-Rohdaten und Diagnoseskripte liegen unter
+Raw data and diagnostic scripts are under
 `../.bonsai-work/rtx-fa-20260929/`: `before.jsonl`, `after.jsonl`,
 `before-trace-summary.txt`, `after-trace-summary.txt`, `benchmark.py`,
 `trace_backend.py`, `deploy.py`, `after-native-fit.jsonl`, `stability.jsonl`
-und `native-fit-runtime-evidence.txt`. Die kompletten Scheduler-Traces liegen
-auf N04 in `/tmp/bonsai-rtx-fa-20260929/`.
-Die CI-Konfiguration ist lokal vorbereitet; sie wurde nicht gepusht oder
-als GitHub-Actions-Lauf validiert. Der RTX-Build wurde lokal tatsächlich gebaut.
+and `native-fit-runtime-evidence.txt`. The complete scheduler traces are
+on N04 in `/tmp/bonsai-rtx-fa-20260929/`.
+The CI configuration is prepared locally; it was not pushed or
+validated as a GitHub Actions run. The RTX build was actually built locally.
 
-Die kalten Ladevorgänge der nativen Konfiguration dauern etwa 43 Sekunden.
-Das Log enthält weiterhin Warnungen des GPU-Discovery-Watchdogs, gefolgt von
-erfolgreicher Geräteerkennung, Modellladung und Inferenz. Diese verbleibende
-Startverzögerung ist durch die FA-Änderung nicht behoben.
+The cold loads of the native configuration take about 43 seconds.
+The log still contains warnings from the GPU discovery watchdog, followed by
+successful device detection, model load and inference. This remaining
+startup delay is not fixed by the FA change.

@@ -31,8 +31,8 @@ services:
       - CUDA_CACHE_PATH=/root/.ollama/cuda-cache
       - LLAMA_ARG_THREADS=4
       - LLAMA_ARG_THREADS_BATCH=4
-      # Nur bei tatsächlich Vision-fähigen Modellen wirksam (Fix aus Finding 1,
-      # BUG-hybrid-arch-degeneration.md) — bei reinen Textmodellen wirkungslos.
+      # Only effective for models that actually have vision support (fix from Finding 1,
+      # BUG-hybrid-arch-degeneration.md) — has no effect on text-only models.
       - LLAMA_ARG_MMPROJ_OFFLOAD=false
     deploy:
       resources:

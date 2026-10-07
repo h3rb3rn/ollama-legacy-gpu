@@ -6,52 +6,55 @@ All notable changes to this fork are documented here.
 
 ## [Unreleased] — 2026-10-06
 
-- **Kolibri-1 measurements:** 8–12 GPUs 10.4–11.1 tok/s decode and 65–69 tok/s prefill; greedy fill (`OLLAMA_FORCE_GPU_LAYERS=1`, scale 1.10) uses 8 of 12 GPUs, 7 fail with CUDA out of memory; needle tests pass up to 250k prompt tokens (250 112 tokens, 180 min, decode 2.7 tok/s); 60-minute soak without errors. Details in docs/TUNING.md.
-- **Kolibri-1:** `patch-llama-kolibri1.py` adds the `kolibri1` architecture (runtime part of the patch published with `Hob-forge/Kolibri-1-GGUF`). `Kolibri-1-Q4_K_M` (78.1B MoE, 47.5 GB) loads in one instance over 12× Tesla M60: 51/51 layers, `-c 262144`, batch 64, all in VRAM (53.2 GB). Decode 10.4–12.5 tok/s; German, reasoning, tool call and a 9421-token needle test pass.
+- **Based on:** Ollama v0.35.1 (llama.cpp b11232)
+- **Image:** `ollama-gaps:kolibri-20261006` (`cuda12-maxwell`, CUDA 12.0.1, archs 50;52;61;75;86, FA=ON, `BONSAI=OFF`)
 
 - **VMM peer access:** `patch-llama-vmm-peer-access.py` limits the forced peer access of the CUDA VMM pool in NCCL builds to eight devices. 12 visible GPUs aborted with `peer mapping resources exhausted` (8 and 9 GPUs ran unpatched); 12× Tesla M60 now load `qwen3.6:35b` in one instance (42/42 layers, `-c 262144`, 10.4 tok/s decode).
+- **Kolibri-1:** `patch-llama-kolibri1.py` adds the `kolibri1` architecture (runtime part of the patch published with `Hob-forge/Kolibri-1-GGUF`). `Kolibri-1-Q4_K_M` (78.1B MoE, 47.5 GB) loads in one instance over 12× Tesla M60: 51/51 layers, `-c 262144`, batch 64, all in VRAM (53.2 GB).
+- **Kolibri-1 measurements:** 8–12 GPUs 10.4–11.1 tok/s decode and 65–69 tok/s prefill; greedy fill (`OLLAMA_FORCE_GPU_LAYERS=1`, scale 1.10) uses 8 of 12 GPUs, 7 fail with CUDA out of memory; needle tests pass up to 250k prompt tokens (250,112 tokens, 180 min, decode 2.7 tok/s); 60-minute soak without errors. Details in [docs/TUNING.md](docs/TUNING.md), raw data in `docs/evidence/kolibri-n02-2026-10-07/`.
+- **CI:** `ignore-error=true` on the GitHub Actions cache export, so a lost cache entry does not fail the build.
+
+Details: [docs/FORK-VS-STOCK.md](docs/FORK-VS-STOCK.md), [docs/TUNING.md](docs/TUNING.md), [docs/FLEET-STATE.md](docs/FLEET-STATE.md).
 
 ## 2026-10-05
 
 - **Based on:** Ollama v0.35.1 (llama.cpp b11232)
-- **Image:** `ollama-gaps:kolibri-20261006` (`cuda12-maxwell`, CUDA 12.0.1, Archs 50;52;61;75;86, FA=ON, `BONSAI=OFF`)
-
-Details: [docs/FORK-VS-STOCK.md](docs/FORK-VS-STOCK.md), [docs/TUNING.md](docs/TUNING.md), [docs/FLEET-STATE.md](docs/FLEET-STATE.md).
+- **Image:** `ollama-gaps:pipefix-20261005` (`cuda12-maxwell`, CUDA 12.0.1, archs 50;52;61;75;86, FA=ON, `BONSAI=OFF`)
 
 ### Added
 
-- **GPU-Abdeckung:** `cuda12-maxwell` baut 50…90 (Maxwell bis Hopper), damit gemischte Hosts ein Image nutzen. Die Images schreiben ihre
-  Targets nach `/usr/lib/ollama/CUDA_ARCHS`; `gpu-detect.sh` maskiert nicht abgedeckte GPUs (`OLLAMA_UNSUPPORTED_GPU=mask|fail|ignore`),
-  der Entrypoint bricht mit Exit 3 ab, wenn keine GPU passt. `patch-ollama-discovery.py` bestimmt die Compute Capability nach
-  CUDA-Index und überspringt Geräte mit unbekannter CC (`OLLAMA_ALLOW_UNKNOWN_CC=1` erlaubt sie).
-- **MTP-Schutz:** `patch-ollama-mtp-default.py` – `OLLAMA_DRAFT_NUM_PREDICT` ist serverweiter Standard und Obergrenze für
-  `draft_num_predict` aus dem Modell-Manifest (0 = MTP aus); ein Anfragewert behält Vorrang; `gpu-detect.sh` setzt 0.
-  Go-Test `TestDraftNumPredictServerDefault`.
-- **Embedding im VRAM:** `patch-llama-input-gpu.py` legt die Eingabeschicht (Token-Embedding) auf das Gerät von Layer 0
-  (`LLAMA_INPUT_LAYER_GPU=0` = Upstream-Platzierung). Empfohlen mit `LLAMA_ARG_FIT_TARGET=256`.
-- **Pipeline-Parallelität:** `patch-llama-pipeline-parallel.py` – `LLAMA_PIPELINE_PARALLEL=0` schaltet sie ab (kleinere gepinnte
-  Host-Puffer); ohne Variable unverändert.
-- **CUDA Graphs auf Maxwell:** `patch-llama-cuda-graphs-legacy.py` – Opt-in `GGML_CUDA_GRAPHS_LEGACY=1`.
-- **Messwerkzeuge:** `scripts/bench-throughput.sh` (wirksame Werte aus dem Runner-Log), `scripts/sweep-batch.sh`,
-  `scripts/compare-batch-quality.py`; Daten in `docs/evidence/batch-quality-2026-10-05/`.
-- **CI:** `BONSAI` ist standardmäßig `OFF` (Repository-Variable `OLLAMA_BONSAI` oder Dispatch-Input `bonsai`); die Spark-Compat-Schicht
-  läuft nur bei `BONSAI=ON`. Bonsai bricht auf 0.35.1 beim Compat-Patch `002-clef.patch` des Prism-Baums.
+- **GPU coverage:** `cuda12-maxwell` builds 50…90 (Maxwell to Hopper) so that mixed hosts can use one image. The images write their
+  targets to `/usr/lib/ollama/CUDA_ARCHS`; `gpu-detect.sh` masks uncovered GPUs (`OLLAMA_UNSUPPORTED_GPU=mask|fail|ignore`),
+  and the entrypoint exits with code 3 if no GPU matches. `patch-ollama-discovery.py` determines the compute capability by
+  CUDA index and skips devices with an unknown CC (`OLLAMA_ALLOW_UNKNOWN_CC=1` allows them).
+- **MTP guard:** `patch-ollama-mtp-default.py` – `OLLAMA_DRAFT_NUM_PREDICT` is the server-wide default and upper bound for
+  `draft_num_predict` from the model manifest (0 = MTP off); a request value takes precedence; `gpu-detect.sh` sets 0.
+  Go test `TestDraftNumPredictServerDefault`.
+- **Embedding in VRAM:** `patch-llama-input-gpu.py` places the input layer (token embedding) on the device of layer 0
+  (`LLAMA_INPUT_LAYER_GPU=0` = upstream placement). Recommended with `LLAMA_ARG_FIT_TARGET=256`.
+- **Pipeline parallelism:** `patch-llama-pipeline-parallel.py` – `LLAMA_PIPELINE_PARALLEL=0` switches it off (smaller pinned
+  host buffers); unchanged without the variable.
+- **CUDA graphs on Maxwell:** `patch-llama-cuda-graphs-legacy.py` – opt-in `GGML_CUDA_GRAPHS_LEGACY=1`.
+- **Measurement tools:** `scripts/bench-throughput.sh` (effective values from the runner log), `scripts/sweep-batch.sh`,
+  `scripts/compare-batch-quality.py`; data in `docs/evidence/batch-quality-2026-10-05/`.
+- **CI:** `BONSAI` defaults to `OFF` (repository variable `OLLAMA_BONSAI` or dispatch input `bonsai`); the Spark compat layer
+  runs only with `BONSAI=ON`. Bonsai fails on 0.35.1 at the compat patch `002-clef.patch` of the Prism tree.
 
 ### Changed
 
-- `gpu-detect.sh` exportiert `OLLAMA_DRAFT_NUM_PREDICT=0` für alle Hosts (MTP ist auch auf der RTX-Gruppe langsamer).
-- `patch-ollama-dynamic-pool.py` halbiert `-c` und `-np` bei gesetztem `OLLAMA_MAX_BATCH_SIZE` nur noch, wenn Flash Attention
-  ausdrücklich aus ist; der Kontext bleibt wie konfiguriert (262144).
+- `gpu-detect.sh` exports `OLLAMA_DRAFT_NUM_PREDICT=0` for all hosts (MTP is slower on the RTX group as well).
+- `patch-ollama-dynamic-pool.py` halves `-c` and `-np` when `OLLAMA_MAX_BATCH_SIZE` is set only if Flash Attention
+  is explicitly off; the context stays as configured (262144).
 
 ### Fixed
 
-- **Fit (nextn-Slot):** `patch-llama-fit-nextn.py` zählt den nextn-Slot immer mit; bei MTP aus blieb sonst Layer 0 auf der CPU (`41/42`).
-  Alle Instanzen laden `42/42`.
+- **Fit (nextn slot):** `patch-llama-fit-nextn.py` always counts the nextn slot; with MTP off, layer 0 would otherwise stay on the CPU (`41/42`).
+  All instances load `42/42`.
 
-### Hardware-Stand
+### Hardware state
 
-`qwen3.6:35b` (Registry-Stand `a7eb95c53bcf`, 35,5B) läuft auf N04-RTX (3 GPUs), N02-M60 und N11-M10 mit Kontext 262144, q4_0-KV und
-42/42 Layern; Messwerte in [docs/TUNING.md](docs/TUNING.md). Offen: die Ursache der restlichen CPU-Bindung des Main-Threads auf Maxwell.
+`qwen3.6:35b` (registry state `a7eb95c53bcf`, 35.5B) runs on N04-RTX (3 GPUs), N02-M60 and N11-M10 with context 262144, q4_0 KV and
+42/42 layers; measurements in [docs/TUNING.md](docs/TUNING.md). Open: the cause of the remaining CPU binding of the main thread on Maxwell.
 
 ---
 

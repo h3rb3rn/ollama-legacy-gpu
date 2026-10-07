@@ -90,7 +90,7 @@ Prism server; it is not the launcher for this Ollama instance.
 ```sh
 curl http://127.0.0.1:11436/api/chat -d '{
   "model":"bonsai2:27b-pq2_0",
-  "messages":[{"role":"user","content":"Was ist die Hauptstadt von Frankreich?"}],
+  "messages":[{"role":"user","content":"What is the capital of France?"}],
   "stream":false
 }'
 ```

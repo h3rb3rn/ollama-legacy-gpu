@@ -1,117 +1,115 @@
-# Fork vs. Stock Ollama
+# Fork vs. stock Ollama
 
-Stand: 2026-10-05. Basis: Ollama v0.35.1, llama.cpp b11232 (per FetchContent
-angezogen). Der Fork ist **kein Quellcode-Fork im Git-Sinn**: Das Docker-Build
-holt den offiziellen Ollama-Tag und wendet Python-Patchskripte aus `scripts/`
-auf die Go- und llama.cpp-Quellen an. Jedes Skript ist idempotent und bricht den
-Build ab (fail closed), wenn der erwartete Anker im Upstream-Code nicht genau
-einmal gefunden wird.
+As of: 2026-10-07. Basis: Ollama v0.35.1, llama.cpp b11232 (pulled in via FetchContent). The fork is **not a source fork in the
+Git sense**: the Docker build fetches the official Ollama tag and applies Python patch scripts from `scripts/` to the Go and
+llama.cpp sources. Every script is idempotent and aborts the build (fail closed) if the expected anchor is not found exactly
+once in the upstream code.
 
-## Was der Fork anders macht (Kurzfassung)
+## What the fork does differently (summary)
 
-| Thema | Stock Ollama | Fork |
+| Topic | Stock Ollama | Fork |
 | --- | --- | --- |
-| GPU-Ziele | nur aktuelle Compute Capabilities | zusätzlich CC 5.0/5.2/6.x/7.0 (Maxwell, Pascal, Volta) per CUDA 12 / 11 |
-| Flash Attention | global an/aus nach Erkennung | pro Tier: nur wenn alle beteiligten GPUs es können |
-| GPU-Auswahl | Ollama-Scheduler | dynamischer Pool (schnelle GPUs zuerst, Legacy-GPUs nur bei Bedarf) |
-| Batchgröße | intern berechnet (gemessen `-b 2048`), `OLLAMA_MAX_BATCH_SIZE` wirkungslos | `OLLAMA_MAX_BATCH_SIZE` wird ausgewertet |
-| Kontext | wie konfiguriert | wie konfiguriert (die Kontext-Halbierung des Pool-Patches gilt nur bei ausdrücklich abgeschalteter Flash Attention) |
-| Unbekannte GPU / CC | kein Abgleich mit den Build-Zielen des Images | Abgleich mit `CUDA_ARCHS`; Default `mask`, `fail`/`ignore` wählbar |
-| MTP-Draft (qwen35moe) | per Modell-Manifest an (`draft_num_predict 2`), stürzt auf Maxwell ab (cuBLAS-Race) | `OLLAMA_DRAFT_NUM_PREDICT` ist Standard und Obergrenze auch für Manifest-Werte; Default 0 |
-| Embedding-Tabelle (`token_embd`) | immer im Host-RAM | folgt Layer 0 in den VRAM |
-| Fit (nextn-Slot) | zählt den Slot nur mit geladenem MTP; bei MTP aus bleibt Layer 0 auf der CPU (`41/42`) | zählt ihn immer mit (`42/42`) |
-| Pipeline-Parallelität (Multi-GPU) | automatisch, vierfache Eingabepuffer im Host-RAM | per `LLAMA_PIPELINE_PARALLEL=0` abschaltbar |
-| CUDA Graphs | auf Legacy-GPUs deaktiviert | per `GGML_CUDA_GRAPHS_LEGACY=1` zuschaltbar |
-| Mehr als 8 GPUs in einem Prozess | NCCL-Build erzwingt VMM-Peer-Zugriff auf alle Geräte; mit 12 GPUs `peer mapping resources exhausted` (9 laufen noch) | Erzwingung nur bis 8 Geräte (`patch-llama-vmm-peer-access.py`); 12× Tesla M60 laufen in einer Instanz |
-| Architektur `kolibri1` (Aleph Alpha Kolibri-1, 78B MoE) | `unknown model architecture: 'kolibri1'` | Architektur über `patches/kolibri1/` (`patch-llama-kolibri1.py`) |
-| Jinja `tojson` | Template-Fehler bei einigen Modellen | kompatibel |
+| GPU targets | current compute capabilities only | additionally CC 5.0/5.2/6.x/7.0 (Maxwell, Pascal, Volta) via CUDA 12 / 11 |
+| Flash Attention | global on/off after detection | per tier: only if all participating GPUs support it |
+| GPU selection | Ollama scheduler | dynamic pool (fast GPUs first, legacy GPUs only when needed) |
+| Batch size | computed internally (measured `-b 2048`), `OLLAMA_MAX_BATCH_SIZE` has no effect | `OLLAMA_MAX_BATCH_SIZE` is honored |
+| Context | as configured | as configured (the context halving of the pool patch applies only when Flash Attention is explicitly disabled) |
+| Unknown GPU / CC | no comparison with the image's build targets | comparison with `CUDA_ARCHS`; default `mask`, `fail`/`ignore` selectable |
+| MTP draft (qwen35moe) | on via model manifest (`draft_num_predict 2`), crashes on Maxwell (cuBLAS race) | `OLLAMA_DRAFT_NUM_PREDICT` is the default and an upper bound, also for manifest values; default 0 |
+| Embedding table (`token_embd`) | always in host RAM | follows layer 0 into VRAM |
+| Fit (nextn slot) | counts the slot only with MTP loaded; with MTP off layer 0 stays on the CPU (`41/42`) | always counts it (`42/42`) |
+| Pipeline parallelism (multi-GPU) | automatic, fourfold input buffers in host RAM | can be switched off with `LLAMA_PIPELINE_PARALLEL=0` |
+| CUDA graphs | disabled on legacy GPUs | can be enabled with `GGML_CUDA_GRAPHS_LEGACY=1` |
+| More than 8 GPUs in one process | NCCL build forces VMM peer access on all devices; with 12 GPUs `peer mapping resources exhausted` (9 still run) | forcing only up to 8 devices (`patch-llama-vmm-peer-access.py`); 12× Tesla M60 run in one instance |
+| Architecture `kolibri1` (Aleph Alpha Kolibri-1, 78B MoE) | `unknown model architecture: 'kolibri1'` | architecture added via `patches/kolibri1/` (`patch-llama-kolibri1.py`) |
+| Jinja `tojson` | template error with some models | compatible |
 
-## Patchskripte
+## Patch scripts
 
 Go (Ollama):
 
-- `patch-ollama-fa.py` – tier-bewusste Flash-Attention-Entscheidung.
-- `patch-ollama-dynamic-pool.py` – `selectGPUPool`: Modell läuft auf dem
-  schnellen Pool, wenn es in dessen VRAM passt (Schwelle 75 %), sonst auf allen.
-  Die Halbierung von `-c` und `-np` bei gesetztem `OLLAMA_MAX_BATCH_SIZE` gilt
-  nur, wenn Flash Attention ausdrücklich aus ist.
+- `patch-ollama-fa.py` – tier-aware Flash Attention decision.
+- `patch-ollama-dynamic-pool.py` – `selectGPUPool`: the model runs on the
+  fast pool if it fits into its VRAM (threshold 75 %), otherwise on all GPUs.
+  The halving of `-c` and `-np` when `OLLAMA_MAX_BATCH_SIZE` is set applies
+  only if Flash Attention is explicitly off.
 - `patch-ollama-batch.py` – `OLLAMA_MAX_BATCH_SIZE`.
-- `patch-ollama-discovery.py` – Compute Capability nach CUDA-Index, fail closed;
-  `OLLAMA_ALLOW_UNKNOWN_CC` erlaubt unbekannte Karten explizit.
-- `patch-ollama-mtp-default.py` – `OLLAMA_DRAFT_NUM_PREDICT`: Wert aus der
-  Anfrage gewinnt; ein Wert aus dem Modell-Manifest wird auf die Variable begrenzt
-  (0 = MTP aus); ohne beides gilt die Variable als Standard. Test:
+- `patch-ollama-discovery.py` – compute capability by CUDA index, fail closed;
+  `OLLAMA_ALLOW_UNKNOWN_CC` explicitly allows unknown cards.
+- `patch-ollama-mtp-default.py` – `OLLAMA_DRAFT_NUM_PREDICT`: a value from the
+  request wins; a value from the model manifest is capped to the variable
+  (0 = MTP off); with neither, the variable is the default. Test:
   `TestDraftNumPredictServerDefault`.
 
 llama.cpp:
 
-- `patch-llama-tier-fitting.py` – Fitting über gemischte GPU-Tiers, Split-Buffer entfernt.
-- `patch-llama-fit-nextn.py` – zählt den nextn-Slot im Fit immer mit.
-- `patch-llama-input-gpu.py` – `llama_model::load_tensors` legt die
-  Eingabeschicht (Token-Embedding) auf das Gerät von Layer 0.
-  `LLAMA_INPUT_LAYER_GPU=0` stellt die Upstream-Platzierung wieder her.
-  Die Platzierung läuft weiter über `select_weight_buft` (mit CPU-Fallback).
-  `LLAMA_ARG_OVERRIDE_TENSOR=token_embd.weight=CUDA0` umgeht diese Prüfung und
-  bricht den Scheduler ab (N11-M10, b11232).
-- `patch-llama-pipeline-parallel.py` – `LLAMA_PIPELINE_PARALLEL=0` überspringt
-  die Pipeline-Parallelität; ohne Variable unverändert.
-- `patch-llama-vmm-peer-access.py` – `ggml_cuda_pool_vmm::alloc` erzwingt in NCCL-Builds die Peer-Freigabe nur bis 8 Geräte
-  (CUDA erlaubt 8 Peers je Mapping); mit mehr als 8 GPUs erhält nur das besitzende Gerät Zugriff.
-- `patch-llama-kolibri1.py` – spielt `patches/kolibri1/kolibri1-llama.cpp.patch` ein (Laufzeitteil des Patches aus
-  `Hob-forge/Kolibri-1-GGUF`, MIT): Gating-Modus `SIGMOID_LOGIT_ADD`, Modellgraph, Tokenizer-Typ `kolibri1`. Ohne den Patch
-  lädt kein Kolibri-1-GGUF. Das Skript berührt `src/CMakeLists.txt`, damit der `models/*.cpp`-Glob neu ausgewertet wird.
-- `patch-llama-jinja-tojson.py` – `tojson`-Kompatibilität.
-- `patch-llama-cuda-graphs-legacy.py` – Opt-in für CUDA Graphs auf CC < 7.0.
+- `patch-llama-tier-fitting.py` – fitting across mixed GPU tiers, split buffer removed.
+- `patch-llama-fit-nextn.py` – always counts the nextn slot in the fit.
+- `patch-llama-input-gpu.py` – `llama_model::load_tensors` places the
+  input layer (token embedding) on the device of layer 0.
+  `LLAMA_INPUT_LAYER_GPU=0` restores the upstream placement.
+  Placement still goes through `select_weight_buft` (with CPU fallback).
+  `LLAMA_ARG_OVERRIDE_TENSOR=token_embd.weight=CUDA0` bypasses this check and
+  aborts the scheduler (N11-M10, b11232).
+- `patch-llama-pipeline-parallel.py` – `LLAMA_PIPELINE_PARALLEL=0` skips
+  pipeline parallelism; unchanged without the variable.
+- `patch-llama-vmm-peer-access.py` – in NCCL builds `ggml_cuda_pool_vmm::alloc` forces peer access only up to 8 devices
+  (CUDA allows 8 peers per mapping); with more than 8 GPUs only the owning device gets access.
+- `patch-llama-kolibri1.py` – applies `patches/kolibri1/kolibri1-llama.cpp.patch` (runtime part of the patch from
+  `Hob-forge/Kolibri-1-GGUF`, MIT): gating mode `SIGMOID_LOGIT_ADD`, model graph, tokenizer type `kolibri1`. Without the patch
+  no Kolibri-1 GGUF loads. The script touches `src/CMakeLists.txt` so that the `models/*.cpp` glob is re-evaluated.
+- `patch-llama-jinja-tojson.py` – `tojson` compatibility.
+- `patch-llama-cuda-graphs-legacy.py` – opt-in for CUDA graphs on CC < 7.0.
 
-## Welche Patches welches Image bekommt
+## Which patches each image gets
 
 | Patch | cuda11-legacy | cuda12-maxwell | cuda13-rtx |
 | --- | --- | --- | --- |
-| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, vmm-peer-access, kolibri1, jinja-tojson | ja | ja | ja |
-| fa, dynamic-pool, batch | ja | ja | ja |
-| discovery, mtp-default | nein | ja | ja |
-| cuda-graphs-legacy | nein | ja | nein |
+| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, vmm-peer-access, kolibri1, jinja-tojson | yes | yes | yes |
+| fa, dynamic-pool, batch | yes | yes | yes |
+| discovery, mtp-default | no | yes | yes |
+| cuda-graphs-legacy | no | yes | no |
 
-## Laufzeit-Skripte (im Image)
+## Runtime scripts (in the image)
 
-- `gpu-detect.sh` – erkennt GPUs, bildet Tiers und exportiert u. a.
+- `gpu-detect.sh` – detects GPUs, forms tiers and exports, among others,
   `OLLAMA_GPU_TIER_THRESHOLD`, `OLLAMA_FAST_GPU_DEVICES`,
-  `OLLAMA_FAST_POOL_VRAM_GB`, `OLLAMA_DRAFT_NUM_PREDICT=0`. Prüft Karten gegen
-  `CUDA_ARCHS` des Images (`OLLAMA_UNSUPPORTED_GPU=mask|fail|ignore`, Default `mask`).
+  `OLLAMA_FAST_POOL_VRAM_GB`, `OLLAMA_DRAFT_NUM_PREDICT=0`. Checks cards against the image's
+  `CUDA_ARCHS` (`OLLAMA_UNSUPPORTED_GPU=mask|fail|ignore`, default `mask`).
 - `ollama-entrypoint.sh`, `auto-optimize.py`, `ollama-proxy.py`,
-  `inject-presets.py` – Start, Tuning, Proxy und Presets
+  `inject-presets.py` – startup, tuning, proxy and presets
   (`presets/gpu-targets.json`).
 
-## Messwerkzeuge (im Repo)
+## Measurement tools (in the repo)
 
-- `scripts/bench-throughput.sh` – Decode und Prefill mit den **wirksamen** Werten aus dem
-  Runner-Log (`n_ctx`, `n_batch`, `n_ubatch`, Flash Attention, KV-Typ, Layer).
-- `scripts/sweep-batch.sh` – Batch-Leiter je Host (startet den Container neu).
-- `scripts/compare-batch-quality.py` – vergleicht Antworten bei verschiedenen Batch-Größen.
+- `scripts/bench-throughput.sh` – decode and prefill with the **effective** values from the
+  runner log (`n_ctx`, `n_batch`, `n_ubatch`, Flash Attention, KV type, layers).
+- `scripts/sweep-batch.sh` – batch ladder per host (restarts the container).
+- `scripts/compare-batch-quality.py` – compares answers at different batch sizes.
 
-## Umgebungsvariablen (fork-spezifisch)
+## Environment variables (fork-specific)
 
-| Variable | Wirkung | Default |
+| Variable | Effect | Default |
 | --- | --- | --- |
-| `OLLAMA_MAX_BATCH_SIZE` | Batchgröße (`-b`/`-ub`) | Stock-Wert |
-| `OLLAMA_DRAFT_NUM_PREDICT` | MTP-Draft-Länge, Standard und Obergrenze (auch für Manifest-Werte), 0 = aus | 0 (durch gpu-detect) |
+| `OLLAMA_MAX_BATCH_SIZE` | batch size (`-b`/`-ub`) | stock value |
+| `OLLAMA_DRAFT_NUM_PREDICT` | MTP draft length, default and upper bound (also for manifest values), 0 = off | 0 (via gpu-detect) |
 | `OLLAMA_UNSUPPORTED_GPU` | `mask`, `fail`, `ignore` | `mask` |
-| `OLLAMA_ALLOW_UNKNOWN_CC` | unbekannte CC zulassen | aus |
-| `GGML_CUDA_GRAPHS_LEGACY` | CUDA Graphs auf Legacy-GPUs | aus |
-| `LLAMA_PIPELINE_PARALLEL` | `0` = Pipeline-Parallelität aus | an |
-| `LLAMA_INPUT_LAYER_GPU` | `0` = Embedding wie Upstream auf der CPU | an |
-| `OLLAMA_FORCE_GPU_LAYERS` | `1` = Greedy-Fill: GPUs vom höchsten CUDA-Index absteigend füllen, nur so viele wie nötig; ersetzt den Fit | aus |
-| `OLLAMA_LAYER_OVERHEAD_SCALE` | Faktor auf die Gewichte je Layer im Greedy-Fill (Reserve für Compute-Puffer und KV), 1,0–5,0 | adaptiv |
-| `LLAMA_ARG_FIT_TARGET` | Fit-Reserve je GPU in MiB (llama.cpp-Variable) | Upstream (~2 GiB) |
+| `OLLAMA_ALLOW_UNKNOWN_CC` | allow unknown CC | off |
+| `GGML_CUDA_GRAPHS_LEGACY` | CUDA graphs on legacy GPUs | off |
+| `LLAMA_PIPELINE_PARALLEL` | `0` = pipeline parallelism off | on |
+| `LLAMA_INPUT_LAYER_GPU` | `0` = embedding on the CPU as upstream | on |
+| `OLLAMA_FORCE_GPU_LAYERS` | `1` = greedy fill: fill GPUs in descending CUDA index order, only as many as needed; replaces the fit | off |
+| `OLLAMA_LAYER_OVERHEAD_SCALE` | factor on the weights per layer in the greedy fill (reserve for compute buffers and KV), 1.0–5.0 | adaptive |
+| `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (llama.cpp variable) | upstream (~2 GiB) |
 
-`LLAMA_ARG_FIT_TARGET` ist Upstream; der Fork empfiehlt `256`, weil mit dem Embedding im VRAM
-sonst ein Experten-Tensor (210,82 MiB `ffn_down_exps`) in den Host-RAM ausweicht.
+`LLAMA_ARG_FIT_TARGET` is upstream; the fork recommends `256` because, with the embedding in VRAM,
+an expert tensor (210.82 MiB `ffn_down_exps`) otherwise spills into host RAM.
 
-## Nicht geändert
+## Unchanged
 
-API, Modellformat, Modelfile-Syntax, Registry und CLI entsprechen Stock.
-KV-Cache-Konfiguration (`OLLAMA_KV_CACHE_TYPE`, `OLLAMA_FLASH_ATTENTION`) ist wie
-bei Stock. Der Bonsai-Pfad (`BONSAI=ON`) ist optional und im aktuellen Default
-aus (`BONSAI=OFF`).
+API, model format, Modelfile syntax, registry and CLI match stock.
+KV cache configuration (`OLLAMA_KV_CACHE_TYPE`, `OLLAMA_FLASH_ATTENTION`) is as in
+stock. The Bonsai path (`BONSAI=ON`) is optional and off in the current default
+(`BONSAI=OFF`).
 
-Messungen zu 8–12 GPUs, Greedy-Fill, Kontext-Leiter und Dauerlauf: [TUNING.md](TUNING.md).
+Measurements for 8–12 GPUs, greedy fill, context ladder and soak test: [TUNING.md](TUNING.md).

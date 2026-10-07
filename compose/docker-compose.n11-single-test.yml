@@ -1,7 +1,7 @@
-# Test-Deployment fuer BUG-hybrid-arch-degeneration.md
-# 4x Single-GPU-Instanzen auf N11-M10 (je 1 Tesla M10, 8 GiB)
-# Repro-Bedingungen aus dem Bug-Report: FA=0, KV-Cache f16
-# OLLAMA_CONTEXT_LENGTH wird empirisch auf das VRAM-Maximum gesetzt (siehe Debug-Notizen unten)
+# Test deployment for BUG-hybrid-arch-degeneration.md
+# 4x single-GPU instances on N11-M10 (one Tesla M10 each, 8 GiB)
+# Repro conditions from the bug report: FA=0, KV cache f16
+# OLLAMA_CONTEXT_LENGTH is set empirically to the VRAM maximum
 
 services:
   ollama-tesla-1:

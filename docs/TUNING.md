@@ -1,212 +1,212 @@
-# Tuning und Messwerte (Stand 2026-10-07)
+# Tuning and measurements (as of 2026-10-07)
 
-Modell `qwen3.6:35b` (Q4_K_M), Kontext 262144, KV-Cache q4_0, Flash Attention an, `LLAMA_ARG_FIT_TARGET=256`,
-Ollama 0.35.1 mit den Patches dieses Repos. Messungen mit `scripts/bench-throughput.sh`: Decode mit dem Prompt
-„Write a long story about a robot.“ (120 Token, `temperature 0`, `seed 1`), Prefill mit ~2500 Wörtern (je Lauf eindeutig),
-je zwei Läufe. **Maßgeblich sind die wirksamen Werte aus dem Runner-Log** (`llama_context: n_ctx / n_batch / n_ubatch`),
-nicht die Env-Datei und nicht `api/ps`: Stock-Ollama ignoriert die Batch-Variablen und rechnet selbst, `api/ps` meldet den
-konfigurierten statt den tatsächlichen Kontext.
+Model `qwen3.6:35b` (Q4_K_M), context 262144, KV cache q4_0, Flash Attention on, `LLAMA_ARG_FIT_TARGET=256`,
+Ollama 0.35.1 with the patches of this repository. Measurements use `scripts/bench-throughput.sh`: decode with the prompt
+"Write a long story about a robot." (120 tokens, `temperature 0`, `seed 1`), prefill with ~2500 words (unique per run),
+two runs each. **The effective values from the runner log are authoritative** (`llama_context: n_ctx / n_batch / n_ubatch`),
+not the env file and not `api/ps`: stock Ollama ignores the batch variables and computes its own, and `api/ps` reports the
+configured instead of the actual context.
 
-## Konfiguration je Instanz
+## Configuration per instance
 
-| Einstellung | N04-RTX | N02-M60 | N11-M10 |
+| Setting | N04-RTX | N02-M60 | N11-M10 |
 |---|---|---|---|
-| Karten im Pool | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 4× Tesla M60 (8 GiB) | 4× Tesla M10 (8 GiB) |
+| Cards in the pool | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 4× Tesla M60 (8 GiB) | 4× Tesla M10 (8 GiB) |
 | Batch (`OLLAMA_MAX_BATCH_SIZE`, `LLAMA_ARG_BATCH`, `LLAMA_ARG_UBATCH`) | 512 | 64 | 64 |
-| Pipeline-Parallelität | an | aus (`LLAMA_PIPELINE_PARALLEL=0`) | aus (`LLAMA_PIPELINE_PARALLEL=0`) |
-| Layer / wirksamer Kontext | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
+| Pipeline parallelism | on | off (`LLAMA_PIPELINE_PARALLEL=0`) | off (`LLAMA_PIPELINE_PARALLEL=0`) |
+| Layers / effective context | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
 | Decode tok/s | 42.3 / 41.6 | 15.0 / 16.0 | 9.3 / 9.3 |
 | Prefill tok/s | 1140 / 1172 | 91.4 / 92.9 | 24.2 / 24.1 |
-| von Ollama als „nicht im VRAM“ gerechnet | 0 MiB (0,0 %) | 0 MiB (0,0 %) | 0 MiB (0,0 %) |
-| Host-Puffer `CUDA_Host compute` | 1029 MiB | 32,8 MiB | 32,8 MiB |
+| Counted by Ollama as "not in VRAM" | 0 MiB (0.0 %) | 0 MiB (0.0 %) | 0 MiB (0.0 %) |
+| Host buffer `CUDA_Host compute` | 1029 MiB | 32.8 MiB | 32.8 MiB |
 
-Die Gewichte, das KV und die Compute-Puffer liegen auf allen drei Instanzen im VRAM. Im Host-RAM bleiben nur gepinnte
-Staging-Puffer: der Host-Puffer oben, ~1 MiB Output-Puffer und ~25 MiB CPU-Compute-Puffer des Vision-Teils.
+Weights, KV cache and compute buffers live in VRAM on all three instances. Only pinned staging buffers stay in host RAM:
+the host buffer above, a ~1 MiB output buffer and a ~25 MiB CPU compute buffer of the vision part.
 
-## Batch-Größe
+## Batch size
 
-Die Batch-Größe bestimmt nur, wie viele Prompt-Token pro Durchlauf verarbeitet werden. Sie beschleunigt den Prefill, der
-Decode (ein Token pro Schritt) ist unabhängig davon. Batch-Leiter bei Kontext 262144, je Host mit dem Modell und der GPU-Zahl
-vom Messzeitpunkt (N04-RTX: vier GPUs; Modellstand je Host nicht einheitlich):
+The batch size only determines how many prompt tokens are processed per pass. It speeds up prefill; decode (one token per
+step) is independent of it. Batch ladder at context 262144, per host with the model and GPU count of the time of measurement
+(N04-RTX: four GPUs; model version not uniform across hosts):
 
-| Host | Env-Batch | wirksam `-b` | Decode tok/s | Prefill tok/s | Compute-Puffer je GPU | Host-Puffer |
+| Host | Env batch | Effective `-b` | Decode tok/s | Prefill tok/s | Compute buffer per GPU | Host buffer |
 |---|---|---|---|---|---|---|
 | N04-RTX (4 GPUs) | 64 | 64 | 40.5 / 40.6 | 624 / 651 | ~650 MiB | – |
-| | 512 | 512 | 40.4 / 40.4 (40.9 / 40.8) | 1021 / 1175 (1014 / 1171) | ~1,6 GiB | 1029 MiB |
-| | 1024 | 1024 | 41.0 / 40.9 | 887 / 1009 | ~2,7 GiB | 2057 MiB |
-| | 2048 | 2048 | 37.6 / 37.6 (nur 3 von 4 GPUs belegt) | 549 / 553 | ~1,75 GiB (3 GPUs) | 1040 MiB |
-| N11-M10 | 64 | 64 | 9.0 / 9.0 | 23.9 / 23.8 | ~551 MiB | 32,8 MiB |
-| | 128 | 128 | 9.1 / 9.1 | 32.2 / 32.2 | ~590 MiB | 65,3 MiB |
-| | 256 | 256 | 9.3 / 9.3 | 40.2 / 40.2 | ~666 MiB | 130,3 MiB |
-| | 512 | 512 | 9.2 / 9.1 | 49.1 / 49.2 | ~821 MiB | 260,3 MiB |
-| | 1024 / 2048 | **512 (gekappt)** | 9.3 / 9.3 | 49 | ~821 MiB | 260,3 MiB |
-| N02-M60 | 64 | 64 | 14.2 / 14.8 | 87 | ~551 MiB | 32,8 MiB |
-| | 128 | 128 | 14.2 / 13.9 | 108.5 / 110.9 | ~589 MiB | 65,3 MiB |
-| | 256 | 256 | 14.2 / 14.9 | 139.0 / 140.5 | ~666 MiB | 130,3 MiB |
-| | 512 | 512 | 13.5 / 12.6 | 150 / 155 | ~821 MiB | 260,3 MiB |
-| | 1024 / 2048 | **512 (gekappt)** | 13.8 / 13.4 | 154 | ~821 MiB | 260,3 MiB |
+| | 512 | 512 | 40.4 / 40.4 (40.9 / 40.8) | 1021 / 1175 (1014 / 1171) | ~1.6 GiB | 1029 MiB |
+| | 1024 | 1024 | 41.0 / 40.9 | 887 / 1009 | ~2.7 GiB | 2057 MiB |
+| | 2048 | 2048 | 37.6 / 37.6 (only 3 of 4 GPUs used) | 549 / 553 | ~1.75 GiB (3 GPUs) | 1040 MiB |
+| N11-M10 | 64 | 64 | 9.0 / 9.0 | 23.9 / 23.8 | ~551 MiB | 32.8 MiB |
+| | 128 | 128 | 9.1 / 9.1 | 32.2 / 32.2 | ~590 MiB | 65.3 MiB |
+| | 256 | 256 | 9.3 / 9.3 | 40.2 / 40.2 | ~666 MiB | 130.3 MiB |
+| | 512 | 512 | 9.2 / 9.1 | 49.1 / 49.2 | ~821 MiB | 260.3 MiB |
+| | 1024 / 2048 | **512 (capped)** | 9.3 / 9.3 | 49 | ~821 MiB | 260.3 MiB |
+| N02-M60 | 64 | 64 | 14.2 / 14.8 | 87 | ~551 MiB | 32.8 MiB |
+| | 128 | 128 | 14.2 / 13.9 | 108.5 / 110.9 | ~589 MiB | 65.3 MiB |
+| | 256 | 256 | 14.2 / 14.9 | 139.0 / 140.5 | ~666 MiB | 130.3 MiB |
+| | 512 | 512 | 13.5 / 12.6 | 150 / 155 | ~821 MiB | 260.3 MiB |
+| | 1024 / 2048 | **512 (capped)** | 13.8 / 13.4 | 154 | ~821 MiB | 260.3 MiB |
 
-- **N04-RTX:** 512 ist das Optimum. 1024 ist langsamer, 2048 lässt eine GPU leer und fällt im Decode.
-- **N11-M10, N02-M60:** höhere Env-Werte werden auf der Kommandozeile des Runners auf `-b 512` gekappt (Ursache nicht untersucht).
-  512 passt mit 42/42, kostet aber 260 MiB Host-Puffer, den Ollama als ~1 % CPU anzeigt; bei 64 sind es 33 MiB und 0 %.
-  Deshalb laufen die beiden 8-GiB-Instanzen mit 64. Der Prefill ist bei 512 etwa doppelt so schnell wie bei 64.
-- **Qualität:** `scripts/compare-batch-quality.py` (feste Prompts, Greedy, frisch geladene Instanz je Lauf) auf N04-RTX: bei
-  Batch 64 und 512 sind 6 von 6 Antworten identisch, darunter ein Needle-in-a-haystack-Test mit 18 044 Token Prompt; zwei
-  Läufe mit 512 stimmen ebenfalls überein. Nur Turing/Ampere geprüft, nicht Maxwell (andere Flash-Attention-Kernel); 6 Prompts,
-  bis zu 200 Token. Rohdaten: `docs/evidence/batch-quality-2026-10-05/`.
-- **Wann 512 sich lohnt:** Prompt-Längen aus den Runner-Logs von N04-RTX (756 Requests): Median 210 Token, 75 % unter 1143,
-  90 % unter 28 885, Maximum 181 904; 40 % unter 64 Token (kein Unterschied), 21 % mindestens 4096, 7 % mindestens 32 768.
-  Die Zeilen tragen keinen Zeitstempel und zählen nur neu berechnete Token (Prompt-Cache-Treffer fehlen).
+- **N04-RTX:** 512 is the optimum. 1024 is slower; 2048 leaves one GPU empty and drops in decode.
+- **N11-M10, N02-M60:** higher env values are capped to `-b 512` on the runner command line (cause not investigated).
+  512 fits with 42/42 but costs 260 MiB of host buffer, which Ollama shows as ~1 % CPU; at 64 it is 33 MiB and 0 %.
+  That is why the two 8 GiB instances run with 64. Prefill at 512 is about twice as fast as at 64.
+- **Quality:** `scripts/compare-batch-quality.py` (fixed prompts, greedy, freshly loaded instance per run) on N04-RTX: at
+  batch 64 and 512, 6 of 6 answers are identical, including a needle-in-a-haystack test with an 18,044-token prompt; two
+  runs at 512 also agree. Only Turing/Ampere were checked, not Maxwell (different Flash Attention kernels); 6 prompts,
+  up to 200 tokens. Raw data: `docs/evidence/batch-quality-2026-10-05/`.
+- **When 512 pays off:** prompt lengths from the N04-RTX runner logs (756 requests): median 210 tokens, 75 % below 1143,
+  90 % below 28,885, maximum 181,904; 40 % below 64 tokens (no difference), 21 % at least 4096, 7 % at least 32,768.
+  The lines carry no timestamp and count only newly computed tokens (prompt cache hits are missing).
 
-## Pipeline-Parallelität
+## Pipeline parallelism
 
-Bei mehreren GPUs im Layer-Split schaltet llama.cpp die Pipeline-Parallelität ein, wenn alle Layer ausgelagert sind
-(`n_gpu_layers > n_layer_all`) und keine Tensor-Overrides aktiv sind. Der Scheduler hält dann vier Kopien seiner Eingabepuffer
-(`sched copies = 4`): der gepinnte Host-Puffer und die Compute-Puffer wachsen.
+With several GPUs in a layer split, llama.cpp enables pipeline parallelism when all layers are offloaded
+(`n_gpu_layers > n_layer_all`) and no tensor overrides are active. The scheduler then keeps four copies of its input buffers
+(`sched copies = 4`): the pinned host buffer and the compute buffers grow.
 
-| Host | Pipeline | Host-Puffer | Compute-Puffer je GPU | Decode tok/s | Prefill tok/s |
+| Host | Pipeline | Host buffer | Compute buffer per GPU | Decode tok/s | Prefill tok/s |
 |---|---|---|---|---|---|
-| N11-M10 (Batch 64) | an | 129,6 MiB (`RssShmem` 146 MiB) | 648 MiB | 9.2 / 9.2 | 24.1 |
-| | aus | 32,8 MiB (`RssShmem` 47 MiB) | 551 MiB | 9.3 / 9.3 | 24.2 / 24.1 |
-| N04-RTX (Batch 512, 3 GPUs) | an | 1029 MiB | ~1,6 GiB | 42.3 / 41.6 | 1140 / 1172 |
-| | aus | 260,3 MiB | 822 MiB | 38.3–39.7 (Mittel 39.3) | 917–932 (Mittel 922) |
+| N11-M10 (batch 64) | on | 129.6 MiB (`RssShmem` 146 MiB) | 648 MiB | 9.2 / 9.2 | 24.1 |
+| | off | 32.8 MiB (`RssShmem` 47 MiB) | 551 MiB | 9.3 / 9.3 | 24.2 / 24.1 |
+| N04-RTX (batch 512, 3 GPUs) | on | 1029 MiB | ~1.6 GiB | 42.3 / 41.6 | 1140 / 1172 |
+| | off | 260.3 MiB | 822 MiB | 38.3–39.7 (mean 39.3) | 917–932 (mean 922) |
 
-Auf Maxwell bringt die Pipeline keinen Vorteil und kostet gepinnten RAM: dort ist sie aus. Auf N04-RTX bringt sie etwa +7 %
-Decode und +20 % Prefill gegen 770 MiB mehr Host-Puffer: dort bleibt sie an. Die Wahl trifft `LLAMA_PIPELINE_PARALLEL`.
-Mit `OLLAMA_GPU_AUTODETECT=1` (N02-M60) erzeugt der Fit des Forks Tensor-Overrides (Fit-Dauer 22,7 s statt 0,9 s), die die
-Pipeline ebenfalls abschalten.
+On Maxwell the pipeline brings no advantage and costs pinned RAM: it is off there. On N04-RTX it brings about +7 %
+decode and +20 % prefill for 770 MiB more host buffer: it stays on there. `LLAMA_PIPELINE_PARALLEL` makes the choice.
+With `OLLAMA_GPU_AUTODETECT=1` (N02-M60) the fork's fit produces tensor overrides (fit duration 22.7 s instead of 0.9 s), which
+also switch the pipeline off.
 
-## Host-Puffer
+## Host buffer
 
-`CUDA_Host compute buffer` ≈ `n_ctx × n_ubatch × 2 Byte` (Attention-Maske), bei Pipeline mal vier:
+`CUDA_Host compute buffer` ≈ `n_ctx × n_ubatch × 2 bytes` (attention mask), times four with the pipeline:
 
-| n_ctx | n_ubatch | Pipeline | berechnet | gemessen |
+| n_ctx | n_ubatch | Pipeline | computed | measured |
 |---|---|---|---|---|
-| 131 072 | 64 | aus | 16 MiB | 18,9 MiB |
-| 131 072 | 256 | aus | 64 MiB | 68,3 MiB |
-| 262 144 | 64 | aus | 32 MiB | 32,8 MiB |
-| 262 144 | 512 | aus | 256 MiB | 260,3 MiB |
-| 262 144 | 64 | an | 128 MiB | 129,6 MiB |
-| 262 144 | 512 | an | 1024 MiB | 1029,1 MiB |
+| 131,072 | 64 | off | 16 MiB | 18.9 MiB |
+| 131,072 | 256 | off | 64 MiB | 68.3 MiB |
+| 262,144 | 64 | off | 32 MiB | 32.8 MiB |
+| 262,144 | 512 | off | 256 MiB | 260.3 MiB |
+| 262,144 | 64 | on | 128 MiB | 129.6 MiB |
+| 262,144 | 512 | on | 1024 MiB | 1029.1 MiB |
 
-Der übrige Prozess-RSS (~0,8–1,0 GiB anonym, ~0,22–0,28 GiB Datei-Mappings der CUDA-Bibliotheken) ist Laufzeit-Overhead,
-keine Modelldaten.
+The rest of the process RSS (~0.8–1.0 GiB anonymous, ~0.22–0.28 GiB file mappings of the CUDA libraries) is runtime overhead,
+not model data.
 
-## Anzeige „CPU“ in `ollama ps`
+## "CPU" display in `ollama ps`
 
-`/api/ps` liefert `size` und `size_vram`; der Prozentwert ist `(size − size_vram) / size`. Auf N02-M60 waren das bei Batch 512
-286 MiB (1,12 %), bei Batch 64 58 MiB (0,24 %) und mit abgeschalteter Pipeline 0 MiB. Auf N04-RTX meldet Ollama 0 MiB, obwohl
-der Runner 1029 MiB gepinnten Host-Puffer anlegt: die Anzeige bildet den Host-Puffer nicht auf jedem Host ab.
-Verlässlich ist `CUDA_Host compute buffer` im Runner-Log.
+`/api/ps` returns `size` and `size_vram`; the percentage is `(size − size_vram) / size`. On N02-M60 this was 286 MiB (1.12 %)
+at batch 512, 58 MiB (0.24 %) at batch 64 and 0 MiB with the pipeline switched off. On N04-RTX Ollama reports 0 MiB although
+the runner allocates 1029 MiB of pinned host buffer: the display does not reflect the host buffer on every host.
+`CUDA_Host compute buffer` in the runner log is reliable.
 
-## N04-RTX: drei gegenüber vier GPUs
+## N04-RTX: three versus four GPUs
 
-Gleiches Image, Kontext 262144, Batch 512, Pipeline an, gleiches Skript:
+Same image, context 262144, batch 512, pipeline on, same script:
 
-| | 4 GPUs (2 Läufe) | 3 GPUs: 2× RTX 2060 + 1× RTX 3060 (4 Läufe) |
+| | 4 GPUs (2 runs) | 3 GPUs: 2× RTX 2060 + 1× RTX 3060 (4 runs) |
 |---|---|---|
-| Decode tok/s | 40.4 / 40.4, 40.9 / 40.8 (Mittel 40.6) | 42.7 / 42.2, 42.2 / 42.7, 41.7 / 42.4, 42.1 / 42.3 (Mittel 42.3) |
-| Prefill, 2. Messung | 1175 / 1171 | 1177 / 1174 / 1160 |
-| VRAM gesamt | 31 198 MiB | 29 443 MiB |
-| freier VRAM je GPU | 3,0 / 4,4 / 5,7 / 4,9 GiB | 1,3 / 3,4 / 2,7 GiB |
+| Decode tok/s | 40.4 / 40.4, 40.9 / 40.8 (mean 40.6) | 42.7 / 42.2, 42.2 / 42.7, 41.7 / 42.4, 42.1 / 42.3 (mean 42.3) |
+| Prefill, 2nd measurement | 1175 / 1171 | 1177 / 1174 / 1160 |
+| Total VRAM | 31,198 MiB | 29,443 MiB |
+| Free VRAM per GPU | 3.0 / 4.4 / 5.7 / 4.9 GiB | 1.3 / 3.4 / 2.7 GiB |
 
-Mit drei GPUs ist der Decode etwa 4 % höher (eine Pipeline-Stufe weniger; nicht geprüft). Der Kontext ist vorab reserviert und
-wächst nicht. Die vierte RTX-3060 ist für andere Aufgaben frei.
+With three GPUs decode is about 4 % higher (one pipeline stage fewer; not verified). The context is reserved up front and
+does not grow. The fourth RTX 3060 is free for other tasks.
 
-## Mehr als 9 GPUs in einer Instanz (N02-M60, 12× Tesla M60)
+## More than 9 GPUs in one instance (N02-M60, 12× Tesla M60)
 
-Die Container bekommen nur die jeweils getesteten Karten (`--gpus device=<UUIDs>` und passendes `CUDA_VISIBLE_DEVICES`); Ollama 0.35.1,
-Kontext 262144, q4_0, Batch 64, `LLAMA_PIPELINE_PARALLEL=0`. Ein erster Versuch, der nur `CUDA_VISIBLE_DEVICES` verkleinerte, aber alle
-12 Karten in den Container reichte, war ungültig (der Runner sah weiter alle 12) und ist nicht verwertet.
+The containers get only the cards under test (`--gpus device=<UUIDs>` and a matching `CUDA_VISIBLE_DEVICES`); Ollama 0.35.1,
+context 262144, q4_0, batch 64, `LLAMA_PIPELINE_PARALLEL=0`. A first attempt that only shrank `CUDA_VISIBLE_DEVICES` but passed all
+12 cards into the container was invalid (the runner still saw all 12) and is not used.
 
-| Image | Modell | GPUs im Container | Ergebnis |
+| Image | Model | GPUs in the container | Result |
 |---|---|---|---|
-| `pipefix-20261005` (ohne Patch) | `qwen3.6:35b` | 8 | läuft, 11,2–11,5 tok/s Decode |
-| `pipefix-20261005` (ohne Patch) | `qwen3.6:35b` | 9 | läuft, 10,7–10,8 tok/s Decode |
-| `pipefix-20261005` (ohne Patch) | `qwen3.6:35b` | 12 | `CUDA error: peer mapping resources exhausted` beim ersten Laden (`cuMemSetAccess` in `ggml_cuda_pool_vmm::alloc`, `ggml-cuda.cu:635`) |
-| `vmmpeer-20261006` (mit `patch-llama-vmm-peer-access.py`) | `qwen3.6:35b` | 12 | läuft, 10,4 tok/s |
-| `kolibri-20261006` (mit Patch) | Kolibri-1 | 8, 9, 10, 11, 12 | läuft, Werte unten |
+| `pipefix-20261005` (no patch) | `qwen3.6:35b` | 8 | runs, 11.2–11.5 tok/s decode |
+| `pipefix-20261005` (no patch) | `qwen3.6:35b` | 9 | runs, 10.7–10.8 tok/s decode |
+| `pipefix-20261005` (no patch) | `qwen3.6:35b` | 12 | `CUDA error: peer mapping resources exhausted` on first load (`cuMemSetAccess` in `ggml_cuda_pool_vmm::alloc`, `ggml-cuda.cu:635`) |
+| `vmmpeer-20261006` (with `patch-llama-vmm-peer-access.py`) | `qwen3.6:35b` | 12 | runs, 10.4 tok/s |
+| `kolibri-20261006` (with patch) | Kolibri-1 | 8, 9, 10, 11, 12 | runs, values below |
 
-Nicht gemessen: 10 und 11 GPUs ohne Patch (Kolibri-1 lädt im Image ohne Kolibri-Patch nicht; mit Qwen nicht wiederholt).
+Not measured: 10 and 11 GPUs without the patch (Kolibri-1 does not load in an image without the Kolibri patch; not repeated with Qwen).
 
-**Ursache:** `libggml-cuda.so` ist gegen NCCL gelinkt (`libnccl.so.2` in `ldd`), dadurch ist `use_peer_access` in `ggml_cuda_pool_vmm::alloc`
-immer wahr und `cuMemSetAccess` bekommt Zugriffsdeskriptoren für alle sichtbaren Geräte. CUDA erlaubt höchstens 8 Peers je Mapping, also
-ein Gerät plus 8 Peers = 9 GPUs. Der Patch erzwingt den Peer-Zugriff nur bis 8 Geräte; das ist vorsichtig gewählt, denn 9 GPUs laufen auch
-ohne Patch. Darüber erhält nur das besitzende Gerät Zugriff.
+**Cause:** `libggml-cuda.so` is linked against NCCL (`libnccl.so.2` in `ldd`), so `use_peer_access` in `ggml_cuda_pool_vmm::alloc`
+is always true and `cuMemSetAccess` receives access descriptors for all visible devices. CUDA allows at most 8 peers per mapping, i.e.
+one device plus 8 peers = 9 GPUs. The patch forces peer access only up to 8 devices; this is a conservative choice, since 9 GPUs also run
+without the patch. Above that, only the owning device gets access.
 
-`qwen3.6:35b` ist auf 12 GPUs mit 10,4 tok/s langsamer als auf dem 4-GPU-Pool (13,9–14,8 tok/s in dieser Messreihe, 15,0–16,0 tok/s im
-Dauerbetrieb des Pools): mehr Stufen, kein Gewinn bei einem Modell, das in vier Karten passt.
+`qwen3.6:35b` is slower on 12 GPUs at 10.4 tok/s than on the 4-GPU pool (13.9–14.8 tok/s in this measurement series, 15.0–16.0 tok/s in
+steady operation of the pool): more stages and no gain for a model that fits on four cards.
 
-## Kolibri-1 auf N02-M60
+## Kolibri-1 on N02-M60
 
-`hf.co/Hob-forge/Kolibri-1-GGUF:Q4_K_M`: Architektur `kolibri1`, 78,1B Parameter (384 Experten, 6 aktiv), 47,5 GB, 51 Layer, natives Kontextfenster
-262144 (GGUF `kolibri1.context_length`), vier von fünf Layern mit Sliding Window 513, jeder fünfte mit voller Attention ohne Positionskodierung.
-Ohne `patch-llama-kolibri1.py` bricht das Laden mit `unknown model architecture: 'kolibri1'` ab. Image `kolibri-20261006`, Batch 64, q4_0,
-`-c 262144`, alle 51 Layer im VRAM, nichts im RAM, Laden 253 s.
+`hf.co/Hob-forge/Kolibri-1-GGUF:Q4_K_M`: architecture `kolibri1`, 78.1B parameters (384 experts, 6 active), 47.5 GB, 51 layers, native context window
+262144 (GGUF `kolibri1.context_length`), four of five layers with a sliding window of 513, every fifth with full attention without positional encoding.
+Without `patch-llama-kolibri1.py` loading aborts with `unknown model architecture: 'kolibri1'`. Image `kolibri-20261006`, batch 64, q4_0,
+`-c 262144`, all 51 layers in VRAM, nothing in RAM, load time 253 s.
 
-**GPU-Zahl** (Decode: 120 Token, `temperature 0`; Prefill: 2500 Wörter; Fit mit Spread, außer letzte Zeile):
+**GPU count** (decode: 120 tokens, `temperature 0`; prefill: 2500 words; fit with spread, except the last row):
 
-| GPUs | VRAM gesamt | höchste GPU | Decode (tok/s) | Prefill (tok/s) |
+| GPUs | Total VRAM | Highest GPU | Decode (tok/s) | Prefill (tok/s) |
 |---|---|---|---|---|
-| 8 | 51,8 GB | 7,5 GB | 11,1 / 10,9 | 68,9 |
-| 9 | 52,4 GB | 6,7 GB | 10,8 / 10,7 | 67,5 |
-| 10 | 53,1 GB | 6,7 GB | 10,7 / 10,5 | 66,6 |
-| 11 | 53,2 GB | 5,8 GB | 10,4 / 10,4 | 65,0 |
-| 12 | 53,3 GB | 5,8 GB | 10,5 / 10,4 | 65,0 |
-| 12 sichtbar, Greedy-Fill 1.10 (belegt 8) | 51,3 GB | 7,2 GB | 11,1 / 10,9 | 67,4 |
+| 8 | 51.8 GB | 7.5 GB | 11.1 / 10.9 | 68.9 |
+| 9 | 52.4 GB | 6.7 GB | 10.8 / 10.7 | 67.5 |
+| 10 | 53.1 GB | 6.7 GB | 10.7 / 10.5 | 66.6 |
+| 11 | 53.2 GB | 5.8 GB | 10.4 / 10.4 | 65.0 |
+| 12 | 53.3 GB | 5.8 GB | 10.5 / 10.4 | 65.0 |
+| 12 visible, greedy fill 1.10 (uses 8) | 51.3 GB | 7.2 GB | 11.1 / 10.9 | 67.4 |
 
-Jede zusätzliche GPU kostet etwa 0,1–0,2 tok/s Decode und 1–2 tok/s Prefill; ein CUDA-Fehler trat in keiner Konfiguration auf.
+Each additional GPU costs about 0.1–0.2 tok/s decode and 1–2 tok/s prefill; no CUDA error occurred in any configuration.
 
-**GPU-Reduktion** mit `OLLAMA_FORCE_GPU_LAYERS=1` (Greedy-Fill, höchster CUDA-Index zuerst, nur so viele GPUs wie nötig), 12 sichtbar:
+**GPU reduction** with `OLLAMA_FORCE_GPU_LAYERS=1` (greedy fill, highest CUDA index first, only as many GPUs as needed), 12 visible:
 
-| `OLLAMA_LAYER_OVERHEAD_SCALE` | GPUs mit Last | VRAM gesamt | höchste GPU | Ergebnis |
+| `OLLAMA_LAYER_OVERHEAD_SCALE` | GPUs under load | Total VRAM | Highest GPU | Result |
 |---|---|---|---|---|
-| 1.10 | 8 | 51,3 GB | 7,2 GB | läuft, 11,1 / 10,9 tok/s; im Dauerlauf stabil (siehe unten) |
-| 1.03 | 7 | 50,9 GB | 8,1 GB | lädt, dann `CUDA error: out of memory` bei der ersten Anfrage, Neuladen (254 s je Versuch) |
+| 1.10 | 8 | 51.3 GB | 7.2 GB | runs, 11.1 / 10.9 tok/s; stable in the soak test (see below) |
+| 1.03 | 7 | 50.9 GB | 8.1 GB | loads, then `CUDA error: out of memory` on the first request, reload (254 s per attempt) |
 
-Mit 1.10 liegt die Reserve je Karte bei etwa 0,9 GB; 7 GPUs lassen keinen Platz für die Compute-Puffer einer Anfrage. `OLLAMA_FORCE_GPU_LAYERS`
-ersetzt den Fit für jedes Modell der Instanz (andere Modelle nicht mit Greedy-Fill gemessen).
+With 1.10 the reserve per card is about 0.9 GB; 7 GPUs leave no room for the compute buffers of a request. `OLLAMA_FORCE_GPU_LAYERS`
+replaces the fit for every model of the instance (other models not measured with greedy fill).
 
-**Kontext-Leiter** (Produktionskonfiguration, Greedy-Fill 8 GPUs, zwei Nadeln bei 25 % und 80 % Tiefe, `temperature 0`, `think true`):
+**Context ladder** (production configuration, greedy fill on 8 GPUs, two needles at 25 % and 80 % depth, `temperature 0`, `think true`):
 
-| Prompt-Token | Prefill (tok/s) | Decode (tok/s) | Dauer | Nadeln gefunden | VRAM-Spitze je GPU |
+| Prompt tokens | Prefill (tok/s) | Decode (tok/s) | Duration | Needles found | VRAM peak per GPU |
 |---|---|---|---|---|---|
-| 9 421 | 58,5 | 11,8 | 3 min | 1/1 | – |
-| 36 554 | 50,6 | 6,4 | 12,6 min | 2/2 | 7 314 MiB |
-| 73 159 | 42,3 | 4,6 | 29 min | 2/2 | 7 314 MiB |
-| 147 213 | 31,7 | 3,7 | 78 min | 2/2 | 7 314 MiB |
-| 221 383 | 25,2 | 3,0 | 148 min | 2/2 | 7 314 MiB |
-| 250 112 | 23,3 | 2,7 | 180 min | 2/2 | 7 314 MiB |
+| 9,421 | 58.5 | 11.8 | 3 min | 1/1 | – |
+| 36,554 | 50.6 | 6.4 | 12.6 min | 2/2 | 7,314 MiB |
+| 73,159 | 42.3 | 4.6 | 29 min | 2/2 | 7,314 MiB |
+| 147,213 | 31.7 | 3.7 | 78 min | 2/2 | 7,314 MiB |
+| 221,383 | 25.2 | 3.0 | 148 min | 2/2 | 7,314 MiB |
+| 250,112 | 23.3 | 2.7 | 180 min | 2/2 | 7,314 MiB |
 
-Der VRAM wächst mit der Prompt-Länge nicht (KV-Cache und Compute-Puffer sind bei `-c 262144` vorab belegt); die Temperatur blieb ≤ 59 °C.
-Decode fällt von 11 auf 2,7 tok/s, Prefill von 69 auf 23 tok/s. Ein erster Lauf mit „245k“ war ungültig: der Prompt hatte etwa 282k Token, wurde
-auf 131 074 Token gekürzt und die erste Nadel ging verloren; die Wiederholung mit 250 112 Token (rund 95 % des Fensters) besteht.
-Rohdaten und Treiberskript: `docs/evidence/kolibri-n02-2026-10-07/`.
+VRAM does not grow with the prompt length (KV cache and compute buffers are reserved up front at `-c 262144`); the temperature stayed ≤ 59 °C.
+Decode falls from 11 to 2.7 tok/s, prefill from 69 to 23 tok/s. A first run with "245k" was invalid: the prompt had about 282k tokens, was truncated
+to 131,074 tokens and the first needle was lost; the repeat with 250,112 tokens (about 95 % of the window) passes.
+Raw data and driver script: `docs/evidence/kolibri-n02-2026-10-07/`.
 
-**Dauerlauf** (60 min, Greedy-Fill 8 GPUs, wechselnd Reasoning-Rechnen, Tool-Call und 1500-Wörter-Prompt, nacheinander):
-220 Anfragen, 0 Fehler, Decode min / Median / max 10,7 / 12,1 / 17,3 tok/s, längste Anfrage 50,7 s, VRAM je GPU konstant 7 314 MiB (Anfang = Ende),
-Temperatur ≤ 55 °C, 0 CUDA-Fehler im Runner-Log. Xid-Meldungen des Treibers ließen sich nicht prüfen (`dmesg` und Kernel-Journal sind für
-den Benutzer nicht lesbar).
+**Soak test** (60 min, greedy fill on 8 GPUs, alternating reasoning arithmetic, tool call and 1500-word prompt, sequentially):
+220 requests, 0 errors, decode min / median / max 10.7 / 12.1 / 17.3 tok/s, longest request 50.7 s, VRAM per GPU constant at 7,314 MiB (start = end),
+temperature ≤ 55 °C, 0 CUDA errors in the runner log. Driver Xid messages could not be checked (`dmesg` and the kernel journal are not readable for
+the test user).
 
-Funktionsprüfung (Image `kolibri-20261006`): Deutsch fließend; Reasoning-Rechnen richtig (80); Tool-Call `get_weather` mit `{"city": "Heidelberg"}`.
-Mit `think: false` landet der Gedankengang im `content` statt in `thinking`; mit `think: true` ist er getrennt (nicht weiter untersucht).
+Functional check (image `kolibri-20261006`): German fluent; reasoning arithmetic correct (80); tool call `get_weather` with `{"city": "Heidelberg"}`.
+With `think: false` the reasoning ends up in `content` instead of `thinking`; with `think: true` it is separated (not investigated further).
 
-## Weitere Befunde
+## Further findings
 
-- **MTP (Speculative Decoding):** auf N04-RTX (4 GPUs) langsamer als ohne: 40.3 tok/s ohne MTP, 38.0 mit `draft_num_predict 2`,
-  28.4 mit 4 (Fließtext-Prompt). Auf Maxwell stürzt es ab. `OLLAMA_DRAFT_NUM_PREDICT=0` ist Standard.
-- **CUDA Graphs auf Maxwell** (`GGML_CUDA_GRAPHS_LEGACY=1`): +35 % Decode auf N11-M10 (6.4 → 8.6 tok/s, CPU-schwacher i5-3470T,
-  Main-Thread bei 100 %), kein Effekt auf N02-M60 (12.4–13.2 gegen 12.6–13.7). Läuft auf N11-M10.
-- **Thread-Zahl** (`LLAMA_ARG_THREADS` 4 / 2 / 1) hat bei vollständiger GPU-Auslagerung keinen Effekt (N11-M10, 8.95 tok/s).
-- **Stresstest** (8025 Token Prompt, 1500 Token Decode, Batch 512): N11-M10 Prefill 45.7 / Decode 7.08 tok/s, N02-M60 148.6 / 9.32
-  tok/s; beide ohne Fehler, VRAM danach unverändert.
-- **Stock-Ollama 0.35.0 auf N04-RTX** (4 GPUs, Kontext 262144, Env-Batch 64): wirksam `-b 2048`, `41/42` Layer, die dritte
-  GPU praktisch ungenutzt; 31.1–31.3 tok/s Decode, 277–281 tok/s Prefill. Der Fork lädt `42/42` auf alle GPUs.
-- **Ohne `LLAMA_ARG_FIT_TARGET=256`** (Standard-Fit-Ziel) weicht `ffn_down_exps` (210,82 MiB) in den Host-Speicher aus.
+- **MTP (speculative decoding):** slower than without on N04-RTX (4 GPUs): 40.3 tok/s without MTP, 38.0 with `draft_num_predict 2`,
+  28.4 with 4 (running-text prompt). It crashes on Maxwell. `OLLAMA_DRAFT_NUM_PREDICT=0` is the default.
+- **CUDA graphs on Maxwell** (`GGML_CUDA_GRAPHS_LEGACY=1`): +35 % decode on N11-M10 (6.4 → 8.6 tok/s, CPU-weak i5-3470T,
+  main thread at 100 %), no effect on N02-M60 (12.4–13.2 versus 12.6–13.7). Runs on N11-M10.
+- **Thread count** (`LLAMA_ARG_THREADS` 4 / 2 / 1) has no effect with full GPU offload (N11-M10, 8.95 tok/s).
+- **Stress test** (8025-token prompt, 1500-token decode, batch 512): N11-M10 prefill 45.7 / decode 7.08 tok/s, N02-M60 148.6 / 9.32
+  tok/s; both without errors, VRAM unchanged afterwards.
+- **Stock Ollama 0.35.0 on N04-RTX** (4 GPUs, context 262144, env batch 64): effective `-b 2048`, `41/42` layers, the third
+  GPU practically unused; 31.1–31.3 tok/s decode, 277–281 tok/s prefill. The fork loads `42/42` on all GPUs.
+- **Without `LLAMA_ARG_FIT_TARGET=256`** (default fit target) `ffn_down_exps` (210.82 MiB) spills into host memory.
 
-## Grenzen
+## Limits
 
-- Je Konfiguration wenige Läufe, keine Streuungsanalyse; Messungen auf Hosts mit anderer Hintergrundlast (ComfyUI, weitere
-  Ollama-Container) können abweichen.
-- Prefill und Decode bei sehr langem Kontext (> 32k), andere Modelle und parallele Requests sind nicht gemessen.
-- Die Ursache der restlichen CPU-Bindung des Main-Threads auf Maxwell ist nicht vollständig geklärt (kein Profiling).
+- Few runs per configuration, no analysis of variance; measurements on hosts with different background load (ComfyUI, further
+  Ollama containers) can deviate.
+- Prefill and decode at very long context (> 32k) for models other than Kolibri-1, other models and parallel requests are not measured.
+- The cause of the remaining CPU binding of the main thread on Maxwell is not fully understood (no profiling).

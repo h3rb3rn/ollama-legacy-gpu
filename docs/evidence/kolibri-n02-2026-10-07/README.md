@@ -9,3 +9,4 @@ Raw results of `kol-suite.py` (Image `ollama-gaps:kolibri-20261006`, Kolibri-1 Q
 - `results-qwen-unpatched-boundary.jsonl`: `qwen3.6:35b` on `pipefix-20261005` (without the VMM patch) with 8 and 9 GPUs (Kolibri-1 does not
   load in that image); a third row (4 GPUs, patched image) belongs to an aborted run.
 - `kol-suite.py`: driver as run on N02-M60 (the ladder rerun used `LADDER=250000 TOK_PER_PARA=83.6`).
+- The German words in the prompts of `kol-suite.py` (filler text, needle sentences, questions) are deliberate test data, not documentation.

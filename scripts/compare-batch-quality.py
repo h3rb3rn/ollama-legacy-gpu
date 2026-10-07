@@ -23,6 +23,8 @@ import sys
 
 SSH_KEY = "~/.ssh/claude"
 
+# The prompts marked _de (and the German sentence in `translate` and the German answer padding of the needle test) are
+# deliberate test data: they check German-language output as well. Changing them invalidates the stored evidence.
 PROMPTS = {
     "explain_de": "Erkläre in genau fünf Sätzen, wie ein Transformer-Sprachmodell Text verarbeitet.",
     "code_py": "Write a Python function merge_intervals(intervals) that merges overlapping intervals. "
