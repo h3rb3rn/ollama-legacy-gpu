@@ -61,6 +61,21 @@ Details, tables and limits: [docs/TUNING.md](docs/TUNING.md).
   `1.10` it uses 8 of 12 GPUs (7 run out of memory). Needle tests pass up to 221k prompt tokens (decode falls to 3 tok/s there); a 60-minute
   soak (220 requests) ran without errors.
 
+Kolibri-1 on N02-M60, production configuration (greedy fill, 8 of 12 GPUs, `-c 262144`, q4_0, batch 64):
+
+| GPUs (spread fit) | Decode (tok/s) | Prefill (tok/s) | | Prompt tokens (needles at 25 % / 80 %) | Prefill (tok/s) | Decode (tok/s) | Needles found |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 8 | 11.1 / 10.9 | 68.9 | | 36 554 | 50.6 | 6.4 | 2/2 |
+| 9 | 10.8 / 10.7 | 67.5 | | 73 159 | 42.3 | 4.6 | 2/2 |
+| 10 | 10.7 / 10.5 | 66.6 | | 147 213 | 31.7 | 3.7 | 2/2 |
+| 11 | 10.4 / 10.4 | 65.0 | | 221 383 | 25.2 | 3.0 | 2/2 |
+| 12 | 10.5 / 10.4 | 65.0 | | | | | |
+| 12 visible, greedy 1.10 (uses 8) | 11.1 / 10.9 | 67.4 | | | | | |
+
+Soak, 60 min, 220 mixed requests: 0 errors, decode 10.7 / 12.1 / 17.3 tok/s (min / median / max), VRAM constant at 7 314 MiB per GPU, ≤ 55 °C.
+A first 245k run was invalid (the prompt exceeded the context and was truncated); the repeat at about 250k tokens is not yet in these tables.
+Driver Xid messages could not be checked (`dmesg` is not readable for the test user).
+
 Tables, context ladder and limits: [docs/TUNING.md](docs/TUNING.md).
 
 ## GPU compatibility

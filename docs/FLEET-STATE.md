@@ -34,7 +34,8 @@ Fit des Forks), N11-M10 mit `GGML_CUDA_GRAPHS_LEGACY=1` (auf N11-M10 +35 % Decod
 
 Die Spalten Decode/Prefill, Layer-Zeilen und Host-Puffer für N02-M60 stammen aus dem früheren 4-GPU-Pool (`qwen3.6:35b`,
 15,0–16,0 / 91–93 tok/s). Auf der 12-GPU-Instanz läuft `qwen3.6:35b` mit 10,4 tok/s (alle 12 GPUs); `Kolibri-1-Q4_K_M` (78,1B, 51/51 Layer,
-`-c 262144`) mit 11,7–11,8 tok/s auf 8 GPUs, Messung in [FORK-VS-STOCK.md](FORK-VS-STOCK.md).
+`-c 262144`) mit 11,1 / 10,9 tok/s Decode und 67,4 tok/s Prefill auf 8 GPUs (Greedy-Fill); Messungen, Kontext-Leiter und Dauerlauf in
+[TUNING.md](TUNING.md).
 
 ## Modell und MTP-Schutz
 
