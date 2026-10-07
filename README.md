@@ -8,15 +8,15 @@ and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2
 
 The build is based on **Ollama v0.40.0** (llama.cpp b11351) with `BONSAI=OFF` by default; the patches apply unchanged and perform
 like the previous base (A/B on N02-M60, see [docs/TUNING.md](docs/TUNING.md)). `ollama-gaps:v040-20261007` serves the Tesla instances of N04-RTX
-(`:11436` 4× M10, `:11442` 2× M60). The `:11434` instances of N04-RTX, N02-M60 and N11-M10 still run the Ollama 0.35.1 images
-(`ollama-gaps:pipefix-20261005`, `ollama-gaps:kolibri-20261006`); they serve `qwen3.6:35b` (35.5B, Q4_K_M) with a
+(`:11436` 4× M10, `:11442` 2× M60) and the nine AI-Village endpoints of N02-M60. The `:11434` instances of N04-RTX and N11-M10 still run the
+Ollama 0.35.1 image `ollama-gaps:pipefix-20261005`; they serve `qwen3.6:35b` (35.5B, Q4_K_M) with a
 **262144-token context, q4_0 KV cache and all 42 layers on the GPUs**. Weights, KV cache and compute buffers live in VRAM; only
 small pinned staging buffers stay in host memory.
 
 | Host | GPUs in the pool | Batch | Pipeline parallelism | Decode | Prefill | Host buffer |
 | --- | --- | --- | --- | --- | --- | --- |
 | N04-RTX | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 512 | on | 42.3 tok/s | ~1150 tok/s | 1029 MiB |
-| N02-M60 | 12× Tesla M60 (8 GiB), one instance | 64 | off | 10.4 tok/s (`qwen3.6:35b`, 12 GPUs); Kolibri-1 11.1 tok/s (8 GPUs) | 65–69 tok/s | – |
+| N02-M60 (v0.40.0) | pool 4× Tesla M60 (`:11434`, `qwen3.6:35b`) + 8 single-GPU instances (`:11435–11442`), one endpoint per AI-Village agent | 64 | off | 13.5 tok/s (pool); 6.5–14.6 tok/s (4B models, 131072/262144 context) | – | 17–33 MiB |
 | N11-M10 | 4× Tesla M10 (8 GiB) | 64 | off | 9.3 tok/s | ~24 tok/s | 32.8 MiB |
 | N04-RTX `:11436` (v0.40.0) | 4× Tesla M10 (8 GiB) | 64 | off | 8.7–9.0 tok/s | ~32 tok/s | 32.8 MiB |
 | N04-RTX `:11442` (v0.40.0) | 2× Tesla M60 (8 GiB), context 32768 | 1024 (default) | off | 13.1 tok/s (`qwen3.5:9b`), 29.6–32.5 tok/s (`llama-guard3:8b`) | 166–228 tok/s | 80 MiB |
@@ -65,7 +65,7 @@ Details, tables and limits: [docs/TUNING.md](docs/TUNING.md).
   `1.10` it uses 8 of 12 GPUs (7 run out of memory). Needle tests pass up to 250k prompt tokens (decode falls to 2.7 tok/s there); a 60-minute
   soak (220 requests) ran without errors.
 
-Kolibri-1 on N02-M60, production configuration (greedy fill, 8 of 12 GPUs, `-c 262144`, q4_0, batch 64):
+Kolibri-1 on N02-M60 (12-GPU single instance, `docker-compose.single12.yml` in the deployment repository, not the current deployment; greedy fill, 8 of 12 GPUs, `-c 262144`, q4_0, batch 64):
 
 | GPUs (spread fit) | Decode (tok/s) | Prefill (tok/s) | | Prompt tokens (needles at 25 % / 80 %) | Prefill (tok/s) | Decode (tok/s) | Needles found |
 | --- | --- | --- | --- | --- | --- | --- | --- |

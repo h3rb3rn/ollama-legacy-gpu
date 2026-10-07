@@ -1,16 +1,16 @@
 # Fleet state (2026-10-06)
 
-The `:11434` instances of N04-RTX, N02-M60 and N11-M10 and the state of the deployment repository
+The Ollama instances of N04-RTX, N02-M60 and N11-M10 and the state of the deployment repository
 (`https://git.4noobs.de/h3rb3rn/ollama.git`). Read on the hosts with `docker inspect`, `git status` and `git log`.
 
 Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and nothing in RAM, `qwen3.6:35b` primary and warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live state (`:11434` instances on Ollama 0.35.1; N04-RTX and N11-M10: `ollama-gaps:pipefix-20261005`, N02-M60: `ollama-gaps:kolibri-20261006`)
+## Live state (`:11434` instances of N04-RTX and N11-M10 on Ollama 0.35.1, `ollama-gaps:pipefix-20261005`; N02-M60 and the Tesla instances of N04-RTX on Ollama v0.40.0, `ollama-gaps:v040-20261007`)
 
-| Setting | N04-RTX | N02-M60 (12 GPUs) | N11-M10 |
+| Setting | N04-RTX | N02-M60 (pool, `:11434`) | N11-M10 |
 |---|---|---|---|
-| Cards in the pool | 3: 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 12× Tesla M60 (8 GiB), greedy fill uses 8 | 4× Tesla M10 (8 GiB) |
+| Cards in the pool | 3: 2× RTX 2060 + 1× RTX 3060 (12 GiB) | 4× Tesla M60 (8 GiB), GPU0-3 | 4× Tesla M10 (8 GiB) |
 | Free for other uses | 1× RTX 3060 (`GPU-63bfbd4b-…`, bus 09:00.0), used by ComfyUI | – | – |
 | `OLLAMA_CONTEXT_LENGTH` | 262144 | 262144 | 262144 |
 | Batch (`OLLAMA_MAX_BATCH_SIZE`, `LLAMA_ARG_BATCH`, `LLAMA_ARG_UBATCH`) | 512 | 64 | 64 |
@@ -19,7 +19,7 @@ Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and no
 | `LLAMA_ARG_MMPROJ_OFFLOAD` | true | true | true |
 | `OLLAMA_DRAFT_NUM_PREDICT` | 0 | 0 | 0 |
 | `OLLAMA_GPU_AUTODETECT` | 0 | 1 | 0 |
-| `OLLAMA_FORCE_GPU_LAYERS` / `OLLAMA_LAYER_OVERHEAD_SCALE` | – | 1 / 1.10 | – |
+| `OLLAMA_FORCE_GPU_LAYERS` / `OLLAMA_LAYER_OVERHEAD_SCALE` | – | – | – |
 | `GGML_CUDA_GRAPHS_LEGACY` | – | – | 1 |
 | `LLAMA_PIPELINE_PARALLEL` | not set (pipeline on) | 0 | 0 |
 | Layers / effective context | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
@@ -28,6 +28,29 @@ Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and no
 | Host buffer `CUDA_Host compute` | 1029 MiB | 32.8 MiB | 32.8 MiB |
 
 Measurements, method and rationale of the settings: [TUNING.md](TUNING.md).
+
+### N02-M60 AI-Village endpoints (Ollama v0.40.0, `ollama-gaps:v040-20261007`)
+
+One endpoint per agent; the port -> agent mapping is part of the agents' configuration (`OLLAMA_URL`) and must not change. The server-side
+`OLLAMA_CONTEXT_LENGTH` of each instance equals the `num_ctx` its agent requests. Model store: `blobs` and `manifests` of `/opt/ollama/models`
+read-only, private directory `/opt/ollama/models/m60-v040-<pool|gpuN>` per instance (the agents never pull or create models).
+Checked on 2026-10-07 by loading each agent's model with its context (`docs/evidence/n02-village-2026-10-07/`):
+
+| Port | Container | GPUs | Agent | Model | Context | Layers | On GPU | Decode (tok/s) |
+|---|---|---|---|---|---|---|---|---|
+| 11434 | `ollama-m60-pool` | GPU0-3 | 01-king | `qwen3.6:35b` | 262144 | 42/42 | 100 % | 13.5 / 13.6 |
+| 11435 | `ollama-m60-gpu4` | GPU4 | 02-explorer | `qwen3.5:4b` | 262144 | 34/34 | 100 % | 6.5 / 8.5 |
+| 11436 | `ollama-m60-gpu5` | GPU5 | 03-librarian | `granite4.2:3b` | 131072 | 41/41 | 100 % | 8.8 / 9.5 |
+| 11437 | `ollama-m60-gpu6` | GPU6 | 04-artisan | `granite4.2:3b` | 131072 | 41/41 | 100 % | 7.7 / 9.3 |
+| 11438 | `ollama-m60-gpu7` | GPU7 | 05-interpreter | `gemma3:4b` | 131072 | 35/35 | 100 % | 9.2 / 8.9 |
+| 11439 | `ollama-m60-gpu8` | GPU8 | 06-operator | `nemotron-3-nano:4b` | 262144 | 43/43 | 100 % | 14.1 / 14.6 |
+| 11440 | `ollama-m60-gpu9` | GPU9 | 07-methodologist | `huggingface.co/empero-ai/Qwen3.8-4B-Distill-GGUF:latest` | 262144 | 34/34 | 100 % | 8.1 / 7.0 |
+| 11441 | `ollama-m60-gpu10` | GPU10 | 08-logician | `hf.co/XHToken/Spark-X2.5-4B-GGUF:Q4_K_M` | 262144 | 37/37 | 100 % | 9.4 / 8.9 |
+| 11442 | `ollama-m60-gpu11` | GPU11 | 09-chronicler | `hf.co/webAI-Official/TwIL-LM3-Pro:Q4_K_M` | 131072 | 41/41 | 100 % | 9.6 / 9.0 |
+
+All instances: batch 64 (host buffer 17–33 MiB), flash attention, q4_0 KV cache, MTP off, no CUDA errors. Think level, `num_predict` and
+`keep_alive` come with each request and were not part of the check. The 12-GPU container (Kolibri-1) is stopped as
+`ollama-m60-12-pre-village-20261007-233313`.
 
 ### N04-RTX Tesla instances (Ollama v0.40.0, `ollama-gaps:v040-20261007`)
 
@@ -47,8 +70,8 @@ Bonsai models (`bonsai2:27b-pq2_0`) are no longer served on `:11436`. Measuremen
 Differences between the hosts that affect comparisons: N02-M60 runs with `OLLAMA_GPU_AUTODETECT=1` (activates the fork's
 fit), N11-M10 with `GGML_CUDA_GRAPHS_LEGACY=1` (+35 % decode on N11-M10, no effect on N02-M60).
 
-The decode/prefill, layer and host buffer values for N02-M60 come from the earlier 4-GPU pool (`qwen3.6:35b`,
-15.0–16.0 / 91–93 tok/s). On the 12-GPU instance `qwen3.6:35b` runs at 10.4 tok/s (all 12 GPUs); `Kolibri-1-Q4_K_M` (78.1B, 51/51 layers,
+The decode/prefill, layer and host buffer values for N02-M60 are those of the earlier 4-GPU pool (`qwen3.6:35b`,
+15.0–16.0 / 91–93 tok/s); on Ollama v0.40.0 the pool reaches 13.5 tok/s in the endpoint check below (A/B against the 0.35.1 build: [TUNING.md](TUNING.md)). The 12-GPU single instance (kept as `docker-compose.single12.yml`) ran `qwen3.6:35b` at 10.4 tok/s (all 12 GPUs) and `Kolibri-1-Q4_K_M` (78.1B, 51/51 layers,
 `-c 262144`) runs at 11.1 / 10.9 tok/s decode and 67.4 tok/s prefill on 8 GPUs (greedy fill); measurements, context ladder and soak test in
 [TUNING.md](TUNING.md).
 
@@ -68,7 +91,7 @@ The deployed state of all hosts lives in the `main` branch of the deployment rep
 | Host | Files | Services |
 |---|---|---|
 | N04-RTX | `llm-studio/worker-rtx/docker-compose.yml` with `.env.stock-rtx`, `.env.stock-rgtx`, `.env.tesla`; `docker-compose.m60-guard.yml`; `docker-compose.m10-pool.yml`; `update.sh` | `ollama` (:11434), `ollama-rgtx` (:11435, stock), `ollama-m60-guard` (:11442), `ollama-m10` (:11436), ComfyUI |
-| N02-M60 | `llm-studio/worker-m60/docker-compose.single12.yml` with `.env.m60-single12` | `ollama-m60-12` (:11434), one instance over all 12 GPUs |
+| N02-M60 | `llm-studio/worker-m60/docker-compose.yml` with `.env.m60-pool` and `.env.m60-single`; alternative layout `docker-compose.single12.yml` with `.env.m60-single12` | `ollama-m60-pool` (:11434) and `ollama-m60-gpu4` … `ollama-m60-gpu11` (:11435–11442), one endpoint per AI-Village agent |
 | N11-M10 | `llm-studio/worker-tesla/docker-compose.yml` (JSON) | `ollama` (:11434) |
 | Control host | `llm-studio/vm-without-gpu/docker-compose.yml` | `open-webui`, `searxng` |
 

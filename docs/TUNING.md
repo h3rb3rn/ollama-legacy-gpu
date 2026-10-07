@@ -170,7 +170,7 @@ Each additional GPU costs about 0.1–0.2 tok/s decode and 1–2 tok/s prefill; 
 With 1.10 the reserve per card is about 0.9 GB; 7 GPUs leave no room for the compute buffers of a request. `OLLAMA_FORCE_GPU_LAYERS`
 replaces the fit for every model of the instance (other models not measured with greedy fill).
 
-**Context ladder** (production configuration, greedy fill on 8 GPUs, two needles at 25 % and 80 % depth, `temperature 0`, `think true`):
+**Context ladder** (12-GPU single instance with greedy fill on 8 GPUs, Ollama 0.35.1, two needles at 25 % and 80 % depth, `temperature 0`, `think true`):
 
 | Prompt tokens | Prefill (tok/s) | Decode (tok/s) | Duration | Needles found | VRAM peak per GPU |
 |---|---|---|---|---|---|

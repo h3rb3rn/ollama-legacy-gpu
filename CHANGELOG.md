@@ -11,6 +11,8 @@ All notable changes to this fork are documented here.
 - **Deployed on N04-RTX:** `ollama-m10` (:11436, 4× Tesla M10, tuned like N11-M10: `qwen3.6:35b` 8.7–9.0 tok/s decode, 31.6 tok/s prefill, 42/42 layers, context 262144) and `ollama-m60-guard` (:11442, 2× Tesla M60) run on v0.40.0. They replace `ollama-tesla-bonsai` (Bonsai build) and the previous guard; Bonsai models are no longer served there. The shared model store is mounted read-only because v0.40.0 migrates the manifest layout (`manifests-v2`, `metadata`).
 - **Upstream changes read for this update:** release notes 0.35.0 / 0.35.1 / 0.40.0, the 26 commits between v0.35.1 and v0.40.0 and the 119 llama.cpp commits b11232…b11351 (summary in docs/TUNING.md).
 
+- **Deployed on N02-M60:** nine endpoints for the AI-Village agents on `ollama-gaps:v040-20261007` (pool on GPU0-3 `:11434` for 01-king, single-GPU instances `:11435`–`:11442` for agents 02-09), context per instance as requested by the agent (131072 or 262144). Every agent's model loads fully on the GPU at its context (batch 64, no CUDA errors; `qwen3.6:35b` 13.5 tok/s, the 4B models 6.5–14.6 tok/s). The 12-GPU Kolibri-1 instance is stopped; its layout stays available as `docker-compose.single12.yml`. Data: `docs/evidence/n02-village-2026-10-07/`.
+
 ## 2026-10-06
 
 - **Based on:** Ollama v0.35.1 (llama.cpp b11232)
