@@ -9,7 +9,7 @@ once in the upstream code.
 
 | Topic | Stock Ollama | Fork |
 | --- | --- | --- |
-| GPU targets | current compute capabilities only | additionally CC 5.0/5.2/6.x/7.0 (Maxwell, Pascal, Volta) via CUDA 12 / 11 |
+| GPU targets | v0.35.1 CUDA 12 build (`llama/server/CMakePresets.json`): `50-virtual;52-virtual;60;61;70;75;80;86;89;90;90a;100;120`, i.e. Maxwell only as PTX (JIT on first start); CUDA 13 build: CC 75 and newer | native CUBINs (`-real`) for CC 5.0–9.0 in one image (no PTX JIT delay), CUDA 12.0.1 base; CUDA 11 image for K80 |
 | Flash Attention | global on/off after detection | per tier: only if all participating GPUs support it |
 | GPU selection | Ollama scheduler | dynamic pool (fast GPUs first, legacy GPUs only when needed) |
 | Batch size | computed internally (measured `-b 2048`), `OLLAMA_MAX_BATCH_SIZE` has no effect | `OLLAMA_MAX_BATCH_SIZE` is honored |
