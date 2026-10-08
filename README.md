@@ -31,7 +31,7 @@ Measured 2026-10-07/08 with `scripts/bench-throughput.sh`-style runs (120-token 
 | N02-M60 `:11435–11442` | 1× Tesla M60 each, one endpoint per AI-Village agent | 3–4B models, 131072/262144 context | 64 | – | 14.2–23.6 tok/s (one run 12.5), agents active | – | 17–33 MiB |
 | N11-M10 `:11434` | 4× Tesla M10 (8 GiB) | `qwen3.6:35b` | 64 | off | 9.2–9.3 tok/s | 24.8 tok/s | 32.8 MiB |
 
-The `:11442` values for `qwen3.5:9b` come from the local build of the same code; all other N04 and the N11-M10 rows are from the GitHub image. One repeat on `:11434` reported 3445 tok/s prefill because a prompt prefix was served from the cache; it is excluded. N04-RTX has 4 vCPUs
+The `:11442` values for `qwen3.5:9b` come from the local build of the same code, the idle values of the N02-M60 pool from the A/B test with the CI candidate of the same base; all other rows are from the GitHub image. One repeat on `:11434` reported 3445 tok/s prefill because a prompt prefix was served from the cache; it is excluded. N04-RTX has 4 vCPUs
 and a high base load, which is why the Tesla rows are below the N02-M60 values for comparable cards.
 
 - [What the fork does differently from stock](docs/FORK-VS-STOCK.md) – patches, scripts, per-image patch matrix, environment variables.
