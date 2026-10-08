@@ -6,7 +6,7 @@ The Ollama instances of N04-RTX, N02-M60 and N11-M10 and the state of the deploy
 Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and nothing in RAM, `qwen3.6:35b` primary and warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live state (all hosts on Ollama v0.40.0: N04-RTX and N11-M10 on the GitHub-built image, N02-M60 on the equivalent local build `ollama-gaps:v040-20261007`)
+## Live state (all hosts on Ollama v0.40.0, GitHub-built image `ghcr.io/h3rb3rn/ollama-legacy@sha256:f4afde44…`, run 37688616665)
 
 | Setting | N04-RTX | N02-M60 (pool, `:11434`) | N11-M10 |
 |---|---|---|---|
@@ -29,28 +29,29 @@ Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and no
 
 Measurements, method and rationale of the settings: [TUNING.md](TUNING.md).
 
-### N02-M60 AI-Village endpoints (Ollama v0.40.0, `ollama-gaps:v040-20261007`)
+### N02-M60 AI-Village endpoints (Ollama v0.40.0, GitHub-built image)
 
 One endpoint per agent; the port -> agent mapping is part of the agents' configuration (`OLLAMA_URL`) and must not change. The server-side
 `OLLAMA_CONTEXT_LENGTH` of each instance equals the `num_ctx` its agent requests. Model store: `blobs` and `manifests` of `/opt/ollama/models`
 read-only, private directory `/opt/ollama/models/m60-v040-<pool|gpuN>` per instance (the agents never pull or create models).
-Checked on 2026-10-07 by loading each agent's model with its context (`docs/evidence/n02-village-2026-10-07/`):
+Checked by loading each agent's model with its context (`docs/evidence/n02-village-2026-10-07/`); the decode values are from the check on the GitHub image on 2026-10-08, measured one endpoint at a time while the agents were active (the check of 2026-10-07 loaded all nine models at once and is not comparable), the King's value is from its idle check:
 
 | Port | Container | GPUs | Agent | Model | Context | Layers | On GPU | Decode (tok/s) |
 |---|---|---|---|---|---|---|---|---|
 | 11434 | `ollama-m60-pool` | GPU0-3 | 01-king | `qwen3.6:35b` | 262144 | 42/42 | 100 % | 13.5 / 13.6 |
-| 11435 | `ollama-m60-gpu4` | GPU4 | 02-explorer | `qwen3.5:4b` | 262144 | 34/34 | 100 % | 6.5 / 8.5 |
-| 11436 | `ollama-m60-gpu5` | GPU5 | 03-librarian | `granite4.2:3b` | 131072 | 41/41 | 100 % | 8.8 / 9.5 |
-| 11437 | `ollama-m60-gpu6` | GPU6 | 04-artisan | `granite4.2:3b` | 131072 | 41/41 | 100 % | 7.7 / 9.3 |
-| 11438 | `ollama-m60-gpu7` | GPU7 | 05-interpreter | `gemma3:4b` | 131072 | 35/35 | 100 % | 9.2 / 8.9 |
-| 11439 | `ollama-m60-gpu8` | GPU8 | 06-operator | `nemotron-3-nano:4b` | 262144 | 43/43 | 100 % | 14.1 / 14.6 |
-| 11440 | `ollama-m60-gpu9` | GPU9 | 07-methodologist | `huggingface.co/empero-ai/Qwen3.8-4B-Distill-GGUF:latest` | 262144 | 34/34 | 100 % | 8.1 / 7.0 |
-| 11441 | `ollama-m60-gpu10` | GPU10 | 08-logician | `hf.co/XHToken/Spark-X2.5-4B-GGUF:Q4_K_M` | 262144 | 37/37 | 100 % | 9.4 / 8.9 |
-| 11442 | `ollama-m60-gpu11` | GPU11 | 09-chronicler | `hf.co/webAI-Official/TwIL-LM3-Pro:Q4_K_M` | 131072 | 41/41 | 100 % | 9.6 / 9.0 |
+| 11435 | `ollama-m60-gpu4` | GPU4 | 02-explorer | `qwen3.5:4b` | 262144 | 34/34 | 100 % | 15.7 / 14.9 |
+| 11436 | `ollama-m60-gpu5` | GPU5 | 03-librarian | `granite4.2:3b` | 131072 | 41/41 | 100 % | 18.1 / 20.6 |
+| 11437 | `ollama-m60-gpu6` | GPU6 | 04-artisan | `granite4.2:3b` | 131072 | 41/41 | 100 % | 20.4 / 21.9 |
+| 11438 | `ollama-m60-gpu7` | GPU7 | 05-interpreter | `gemma3:4b` | 131072 | 35/35 | 100 % | 15.0 / 15.8 |
+| 11439 | `ollama-m60-gpu8` | GPU8 | 06-operator | `nemotron-3-nano:4b` | 262144 | 43/43 | 100 % | 22.8 / 12.5 |
+| 11440 | `ollama-m60-gpu9` | GPU9 | 07-methodologist | `huggingface.co/empero-ai/Qwen3.8-4B-Distill-GGUF:latest` | 262144 | 34/34 | 100 % | 16.4 / 16.2 |
+| 11441 | `ollama-m60-gpu10` | GPU10 | 08-logician | `hf.co/XHToken/Spark-X2.5-4B-GGUF:Q4_K_M` | 262144 | 37/37 | 100 % | 15.0 / 14.2 |
+| 11442 | `ollama-m60-gpu11` | GPU11 | 09-chronicler | `hf.co/webAI-Official/TwIL-LM3-Pro:Q4_K_M` | 131072 | 41/41 | 100 % | 22.4 / 21.6 |
 
 All instances: batch 64 (host buffer 17–33 MiB), flash attention, q4_0 KV cache, MTP off, no CUDA errors. Think level, `num_predict` and
-`keep_alive` come with each request and were not part of the check. The 12-GPU container (Kolibri-1) is stopped as
-`ollama-m60-12-pre-village-20261007-233313`.
+`keep_alive` come with each request and were not part of the check. The previous containers (local v0.40.0 build, 2026-10-08 14:31–14:40) are stopped as `ollama-m60-*-pre-gh040-20261008-143125`;
+the 12-GPU container (Kolibri-1) is stopped as `ollama-m60-12-pre-village-20261007-233313`. The King's pool generated 39 long agent answers at a median of
+7.8 tok/s (7.0–8.7) on the previous container and 8.3 tok/s on the first long answer of the new one (all nine endpoints busy).
 
 ### N11-M10 (Ollama v0.40.0, GitHub-built image)
 

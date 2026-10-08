@@ -13,7 +13,7 @@ see [docs/TUNING.md](docs/TUNING.md)). GitHub Actions builds the newest Ollama r
 
 - **N04-RTX:** all four Ollama instances (`:11434`, `:11435`, `:11436`, `:11442`) run the GitHub Actions image of run 37688616665
   (v0.40.0, revision `738c694`, `ghcr.io/h3rb3rn/ollama-legacy`, digest-pinned).
-- **N02-M60:** the nine AI-Village endpoints run the equivalent local build `ollama-gaps:v040-20261007`.
+- **N02-M60:** the nine AI-Village endpoints run the same image (digest-pinned, v0.40.0).
 - **N11-M10:** the same GitHub Actions image (digest-pinned, v0.40.0).
 
 `qwen3.6:35b` (35.5B, Q4_K_M) runs with a **262144-token context, q4_0 KV cache and all 42 layers on the GPUs** on the pooled instances. Weights,
@@ -27,8 +27,8 @@ Measured 2026-10-07/08 with `scripts/bench-throughput.sh`-style runs (120-token 
 | N04-RTX `:11435` | RTX 2060 + GTX 1060 (6 GiB) | `moe-sovereign-planner-9b` | 512 | on | 24.3–24.4 tok/s | 697 tok/s | 1057 MiB |
 | N04-RTX `:11436` | 4× Tesla M10 (8 GiB) | `qwen3.6:35b` | 64 | off | 8.8–8.9 tok/s | 32.5 tok/s | 32.8 MiB |
 | N04-RTX `:11442` | 2× Tesla M60 (8 GiB), context 32768 | `llama-guard3:8b` / `qwen3.5:9b` | 1024 (default) | off | 29.8–31.5 / 13.1–13.2 tok/s | 227 / 166 tok/s | 80 MiB |
-| N02-M60 `:11434` (pool) | 4× Tesla M60 (8 GiB) | `qwen3.6:35b` | 64 | off | 13.1–15.8 tok/s | 84–85 tok/s | 32.8 MiB |
-| N02-M60 `:11435–11442` | 1× Tesla M60 each, one endpoint per AI-Village agent | 3–4B models, 131072/262144 context | 64 | – | 6.5–14.6 tok/s | – | 17–33 MiB |
+| N02-M60 `:11434` (pool) | 4× Tesla M60 (8 GiB) | `qwen3.6:35b` | 64 | off | 13.1–15.8 tok/s idle; 7–8.7 tok/s while all nine agents are busy | 84–85 tok/s | 32.8 MiB |
+| N02-M60 `:11435–11442` | 1× Tesla M60 each, one endpoint per AI-Village agent | 3–4B models, 131072/262144 context | 64 | – | 14.2–23.6 tok/s (one run 12.5), agents active | – | 17–33 MiB |
 | N11-M10 `:11434` | 4× Tesla M10 (8 GiB) | `qwen3.6:35b` | 64 | off | 9.2–9.3 tok/s | 24.8 tok/s | 32.8 MiB |
 
 The `:11442` values for `qwen3.5:9b` come from the local build of the same code; all other N04 and the N11-M10 rows are from the GitHub image. One repeat on `:11434` reported 3445 tok/s prefill because a prompt prefix was served from the cache; it is excluded. N04-RTX has 4 vCPUs
