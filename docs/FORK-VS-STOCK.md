@@ -1,6 +1,6 @@
 # Fork vs. stock Ollama
 
-As of: 2026-10-07. Basis: Ollama v0.40.0, llama.cpp b11351 (pulled in via FetchContent; the patches also apply to v0.35.1 / b11232). The fork is **not a source fork in the
+As of: 2026-10-08. Basis: Ollama v0.40.0, llama.cpp b11351 (pulled in via FetchContent; the patches also apply to v0.35.1 / b11232). The fork is **not a source fork in the
 Git sense**: the Docker build fetches the official Ollama tag and applies Python patch scripts from `scripts/` to the Go and
 llama.cpp sources. Every script is idempotent and aborts the build (fail closed) if the expected anchor is not found exactly
 once in the upstream code.

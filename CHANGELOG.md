@@ -4,17 +4,19 @@ All notable changes to this fork are documented here.
 
 ---
 
+## [Unreleased] — 2026-10-08
+
+- **N04-RTX rollout:** all four Ollama instances (`:11434`, `:11435`, `:11436`, `:11442`) run the GitHub Actions image of run 37688616665 (Ollama v0.40.0, revision `738c694`, digest-pinned). Validation against the previous state with the same models: `:11435` (stock 0.35.0 → fork) +7 % decode, +19 % prefill; the Tesla instances unchanged; `:11434` prefill equal, decode about 4 % lower on average (single runs). See [docs/TUNING.md](docs/TUNING.md).
+- **Versioning:** git tags `vX.Y.Z` mark the last commit based on Ollama `vX.Y.Z` (added for v0.30.10, v0.30.11, v0.32.15, v0.33.2, v0.33.3, v0.34.0, v0.34.1, v0.34.2, v0.34.4, v0.35.1 and v0.40.0). Every non-Bonsai CI build additionally tags its image `<variant>-<ollama version>`; the first run with this rule (37744806101, revision `b22a75e`) produced `cuda12-maxwell-0.40.1`. See [docs/VERSIONING.md](docs/VERSIONING.md).
+- **CI builds the newest Ollama release:** run 37744806101 built Ollama v0.40.1 (nine commits after v0.40.0: cloud usage API proxy, Windows fixes, MLX patch, documentation; no llama.cpp or CUDA change). That image is not validated on hardware and not deployed; the hosts run the v0.40.0 build. There is no image tag `cuda12-maxwell-0.40.0` (the v0.40.0 build predates the version tags) and no git tag `v0.40.1` yet.
+- **Documentation:** README status section and measured values updated to the GitHub-image measurements; runtime status of the GPU table extended (GTX 1060 and the M60 variants tested); the release-automation note about stock Ollama on N04 `:11434`/`:11435` removed.
+
 ## [Unreleased] — 2026-10-07
-
-- **N04-RTX rollout (2026-10-08):** all four Ollama instances (`:11434`, `:11435`, `:11436`, `:11442`) run the GitHub Actions image of run 37688616665 (Ollama v0.40.0, revision `738c694`, digest-pinned). Validation against the previous state with the same models: `:11435` (stock 0.35.0 → fork) +7 % decode, +19 % prefill; the Tesla instances unchanged; `:11434` prefill equal, decode about 4 % lower on average (single runs). See [docs/TUNING.md](docs/TUNING.md).
-
-- **Versioning:** git tags `vX.Y.Z` now mark the last commit based on Ollama `vX.Y.Z` (tags added for v0.30.10, v0.30.11, v0.32.15, v0.33.2, v0.33.3, v0.34.0, v0.34.1, v0.34.2, v0.34.4, v0.35.1 and v0.40.0); every non-Bonsai CI build additionally tags its image `<variant>-<ollama version>` (e.g. `cuda12-maxwell-0.40.0`). See [docs/VERSIONING.md](docs/VERSIONING.md).
 
 - **Based on:** Ollama v0.40.0 (llama.cpp b11351); `OLLAMA_VERSION` defaults in all three Dockerfiles are `v0.40.0` (was `main`). All patch scripts apply unchanged. A/B on N02-M60 (4× Tesla M60, deployed configuration, `qwen3.6:35b`): decode 13.1–15.8 tok/s on both bases, prefill 84–85 tok/s, load time 141–142 s. Details in [docs/TUNING.md](docs/TUNING.md).
 - **Image:** `ollama-gaps:v040-20261007` (`cuda12-maxwell`, CUDA 12.0.1, archs 50;52;61;75;86, FA=ON, `BONSAI=OFF`); the CI builds the same Dockerfile with ten architectures and Ollama `latest`.
 - **Deployed on N04-RTX:** `ollama-m10` (:11436, 4× Tesla M10, tuned like N11-M10: `qwen3.6:35b` 8.7–9.0 tok/s decode, 31.6 tok/s prefill, 42/42 layers, context 262144) and `ollama-m60-guard` (:11442, 2× Tesla M60) run on v0.40.0. They replace `ollama-tesla-bonsai` (Bonsai build) and the previous guard; Bonsai models are no longer served there. The shared model store is mounted read-only because v0.40.0 migrates the manifest layout (`manifests-v2`, `metadata`).
 - **Upstream changes read for this update:** release notes 0.35.0 / 0.35.1 / 0.40.0, the 26 commits between v0.35.1 and v0.40.0 and the 119 llama.cpp commits b11232…b11351 (summary in docs/TUNING.md).
-
 - **Deployed on N02-M60:** nine endpoints for the AI-Village agents on `ollama-gaps:v040-20261007` (pool on GPU0-3 `:11434` for 01-king, single-GPU instances `:11435`–`:11442` for agents 02-09), context per instance as requested by the agent (131072 or 262144). Every agent's model loads fully on the GPU at its context (batch 64, no CUDA errors; `qwen3.6:35b` 13.5 tok/s, the 4B models 6.5–14.6 tok/s). The 12-GPU Kolibri-1 instance is stopped; its layout stays available as `docker-compose.single12.yml`. Data: `docs/evidence/n02-village-2026-10-07/`.
 
 ## 2026-10-06

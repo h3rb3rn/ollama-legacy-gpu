@@ -60,9 +60,9 @@ Each host JSON file contains:
   "context": 190000,
   "bonsai_model": "bonsai2:27b-pq2_0",
   "ordinary_model": "qwen3.5:4b",
-  "protected_containers": ["ollama", "ollama-tesla-bonsai", "ollama-rgtx", "ollama-m60-guard"],
+  "protected_containers": ["ollama", "ollama-m10", "ollama-rgtx", "ollama-m60-guard"],
   "deployment": {
-    "container": "ollama-tesla-bonsai",
+    "container": "ollama-m10",
     "port": 11436,
     "bind_ip": "",
     "kv_type": "q4_0"
@@ -106,8 +106,9 @@ recovery from the retained container. Model files are never removed.
   N04. GPU requests, mount, port, resource limits and restart settings were
   preserved. The rollback test deliberately injected inference failure; it
   did not load an LLM or constitute a production release qualification.
-- User directs Stock Ollama 0.35.0 for N04 ports 11434 and 11435. Exclude these
-  endpoints from automatic fork deployment unless that instruction changes.
+- The earlier instruction to keep stock Ollama 0.35.0 on N04 ports 11434 and 11435 no longer applies: both run the fork build (11434 since
+  2026-10-05, 11435 since 2026-10-08, GitHub image of run 37688616665). Automatic deployment is still off (no deployment inventory configured);
+  the N04 instances are replaced manually from their own compose files.
 - Publish the reviewed changes and observe a complete Actions run, including
   hardware artifacts, rollout, promoted digests and version recording.
 

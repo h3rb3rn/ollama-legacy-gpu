@@ -1,4 +1,4 @@
-# Fleet state (2026-10-06)
+# Fleet state (2026-10-08)
 
 The Ollama instances of N04-RTX, N02-M60 and N11-M10 and the state of the deployment repository
 (`https://git.4noobs.de/h3rb3rn/ollama.git`). Read on the hosts with `docker inspect`, `git status` and `git log`.
@@ -55,8 +55,8 @@ All instances: batch 64 (host buffer 17–33 MiB), flash attention, q4_0 KV cach
 ### N04-RTX instances (Ollama v0.40.0, GitHub-built image)
 
 Image `ghcr.io/h3rb3rn/ollama-legacy@sha256:f4afde4402e55d28af4d09e36d4c7c6c12fa226c83746bbb7baac253dbedb719`: GitHub Actions run 37688616665,
-revision `738c694`, Ollama v0.40.0 / llama.cpp b11351, tag `candidate-37688616665-1-cuda12-maxwell-native` (from the next CI run on also
-`cuda12-maxwell-0.40.0`). All four instances use it, mount `blobs` and the legacy `manifests` of `/opt/ollama/models` read-only and write to a
+revision `738c694`, Ollama v0.40.0 / llama.cpp b11351, tag `candidate-37688616665-1-cuda12-maxwell-native` (this build predates the
+version tags; the newest CI build `cuda12-maxwell-0.40.1` is based on Ollama v0.40.1 and not deployed). All four instances use it, mount `blobs` and the legacy `manifests` of `/opt/ollama/models` read-only and write to a
 private directory each (`n04-v040-rtx`, `n04-v040-rgtx`, `n04-v040`, `n04-v040-guard`). The previous containers are stopped and kept as
 `ollama-pre-gh040-…`, `ollama-rgtx-pre-gh040-…`, `ollama-m10-pre-gh040-…` and `ollama-m60-guard-pre-gh040-…` (2026-10-08).
 

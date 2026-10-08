@@ -1,4 +1,4 @@
-# Tuning and measurements (as of 2026-10-07)
+# Tuning and measurements (as of 2026-10-08)
 
 The measurements below were taken on Ollama 0.35.1 / llama.cpp b11232 unless a section says v0.40.0 (llama.cpp b11351); see
 [Ollama v0.40.0](#ollama-v0400-llamacpp-b11351) for the comparison of both bases.
