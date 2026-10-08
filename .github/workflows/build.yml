@@ -120,7 +120,11 @@ jobs:
             CUDA_ARCHITECTURES=${{ matrix.architectures }}
             GGML_CUDA_FA=${{ matrix.flash_attention }}
             JOBS=4
-          tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}-native
+          # Every build is also tagged with the Ollama version it is based on (`<variant>-<version>`, e.g. cuda12-maxwell-0.40.0).
+          # A rebuild on the same Ollama version moves this tag; the immutable reference stays the candidate tag and its digest.
+          tags: |
+            ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}-native
+            ${{ env.BONSAI != 'ON' && format('{0}:{1}-{2}', env.IMAGE, matrix.variant, needs.prepare.outputs.short) || '' }}
           cache-from: type=gha,scope=${{ env.BONSAI == 'ON' && 'bonsai' || 'plain' }}-${{ matrix.variant }}-v2
           cache-to: type=gha,scope=${{ env.BONSAI == 'ON' && 'bonsai' || 'plain' }}-${{ matrix.variant }}-v2,mode=max,ignore-error=true
           labels: |

@@ -6,6 +6,8 @@ All notable changes to this fork are documented here.
 
 ## [Unreleased] — 2026-10-07
 
+- **Versioning:** git tags `vX.Y.Z` now mark the last commit based on Ollama `vX.Y.Z` (tags added for v0.30.10, v0.30.11, v0.32.15, v0.33.2, v0.33.3, v0.34.0, v0.34.1, v0.34.2, v0.34.4, v0.35.1 and v0.40.0); every non-Bonsai CI build additionally tags its image `<variant>-<ollama version>` (e.g. `cuda12-maxwell-0.40.0`). See [docs/VERSIONING.md](docs/VERSIONING.md).
+
 - **Based on:** Ollama v0.40.0 (llama.cpp b11351); `OLLAMA_VERSION` defaults in all three Dockerfiles are `v0.40.0` (was `main`). All patch scripts apply unchanged. A/B on N02-M60 (4× Tesla M60, deployed configuration, `qwen3.6:35b`): decode 13.1–15.8 tok/s on both bases, prefill 84–85 tok/s, load time 141–142 s. Details in [docs/TUNING.md](docs/TUNING.md).
 - **Image:** `ollama-gaps:v040-20261007` (`cuda12-maxwell`, CUDA 12.0.1, archs 50;52;61;75;86, FA=ON, `BONSAI=OFF`); the CI builds the same Dockerfile with ten architectures and Ollama `latest`.
 - **Deployed on N04-RTX:** `ollama-m10` (:11436, 4× Tesla M10, tuned like N11-M10: `qwen3.6:35b` 8.7–9.0 tok/s decode, 31.6 tok/s prefill, 42/42 layers, context 262144) and `ollama-m60-guard` (:11442, 2× Tesla M60) run on v0.40.0. They replace `ollama-tesla-bonsai` (Bonsai build) and the previous guard; Bonsai models are no longer served there. The shared model store is mounted read-only because v0.40.0 migrates the manifest layout (`manifests-v2`, `metadata`).

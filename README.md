@@ -23,6 +23,7 @@ small pinned staging buffers stay in host memory.
 
 - [What the fork does differently from stock](docs/FORK-VS-STOCK.md) – patches, scripts, per-image patch matrix, environment variables.
 - [Tuning and measurements](docs/TUNING.md) – batch size, pipeline parallelism, host buffers, quality check, prompt lengths.
+- [Versioning and tags](docs/VERSIONING.md) – the tag is always the Ollama version a build is based on (git tags and image tags).
 - [Fleet state](docs/FLEET-STATE.md) – live configuration per host, model versions, state of the deployment clones.
 - [CHANGELOG](CHANGELOG.md) and [release automation](GPU-RELEASE-AUTOMATION.md).
 
