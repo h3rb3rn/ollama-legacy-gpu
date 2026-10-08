@@ -244,6 +244,22 @@ host, not the Ollama version; with the tuned configuration below the same hardwa
 
 For reference N11-M10 (also 4× M10, Ollama 0.35.1): 9.3 tok/s decode and 24.2 tok/s prefill.
 
+**GitHub-built image on all four N04-RTX instances** (2026-10-08; image from GitHub Actions run 37688616665, revision `738c694`, digest-pinned;
+same models and script before and after, raw data in `docs/evidence/n04-github-image-rollout-2026-10-08/`):
+
+| Instance | Model | Before (decode / prefill) | After (decode / prefill) | Layers / on GPU |
+|---|---|---|---|---|
+| `:11434`, RTX 2060 ×2 + RTX 3060 (fork 0.35.1 → v0.40.0) | `qwen3.6:35b` | 42.7 / 42.8 / 42.3 tok/s, 1149 tok/s | 42.8 / 40.1 / 41.2 tok/s, 1028 tok/s; repeats 41.9 / 37.8 / 40.7, 1148 tok/s and 39.5 / 40.1 / 41.0 | 42/42, 100 % |
+| `:11435`, RTX 2060 + GTX 1060 (stock 0.35.0 → fork v0.40.0) | `moe-sovereign-planner-9b` | 22.7 / 22.9 / 21.9 tok/s, 585 tok/s | 24.3 / 24.4 / 24.4 tok/s, 697 tok/s | 33/33, 100 % |
+| `:11436`, 4× M10 (local v0.40.0 build → CI image) | `qwen3.6:35b` | 9.0 / 8.9 / 8.7 tok/s, 31.6 tok/s | 8.9 / 8.9 / 8.8 tok/s, 32.5 tok/s | 42/42, 100 % |
+| `:11442`, 2× M60 (local v0.40.0 build → CI image) | `llama-guard3:8b` | 29.6 / 32.5 / 32.1 tok/s, 228 tok/s | 29.8 / 31.5 / 31.1 tok/s, 227 tok/s | 33/33, 100 % |
+
+No CUDA errors. The CI image builds ten CUDA architectures instead of five; the Tesla instances show no difference. On `:11434` the decode is about
+4 % lower on average (40.7 against 42.5 tok/s over the repeats) while the prefill is equal; with single runs on a host with 4 vCPUs this is within
+the spread, a regression is neither shown nor excluded (an interleaved A/B on that instance was not run). `:11435` gains 7 % decode and 19 % prefill
+from the fork build and v0.40.0. The v0.40.0 logs warn about models without a chat template (`moe-sovereign-planner-olmo3-7b`) and report the
+Bonsai models as unreadable (`unsupported tensor "output.weight"`).
+
 **Model store and the manifest migration.** v0.40.0 creates `manifests-v2` and `metadata` next to the legacy `manifests` directory and
 converts Ollama-format models in the background (disk estimate: converted size + 25 % + 512 MiB). The N04 containers share
 `/opt/ollama/models` with other Ollama versions, so the two v0.40.0 instances mount `blobs` and the legacy `manifests` read-only and write

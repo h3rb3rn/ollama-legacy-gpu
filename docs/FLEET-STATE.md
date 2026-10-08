@@ -6,7 +6,7 @@ The Ollama instances of N04-RTX, N02-M60 and N11-M10 and the state of the deploy
 Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and nothing in RAM, `qwen3.6:35b` primary and warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live state (`:11434` instances of N04-RTX and N11-M10 on Ollama 0.35.1, `ollama-gaps:pipefix-20261005`; N02-M60 and the Tesla instances of N04-RTX on Ollama v0.40.0, `ollama-gaps:v040-20261007`)
+## Live state (N11-M10 on Ollama 0.35.1, `ollama-gaps:pipefix-20261005`; N02-M60 on Ollama v0.40.0, local build `ollama-gaps:v040-20261007`; all four Ollama instances of N04-RTX on Ollama v0.40.0, GitHub-built image)
 
 | Setting | N04-RTX | N02-M60 (pool, `:11434`) | N11-M10 |
 |---|---|---|---|
@@ -52,7 +52,24 @@ All instances: batch 64 (host buffer 17–33 MiB), flash attention, q4_0 KV cach
 `keep_alive` come with each request and were not part of the check. The 12-GPU container (Kolibri-1) is stopped as
 `ollama-m60-12-pre-village-20261007-233313`.
 
-### N04-RTX Tesla instances (Ollama v0.40.0, `ollama-gaps:v040-20261007`)
+### N04-RTX instances (Ollama v0.40.0, GitHub-built image)
+
+Image `ghcr.io/h3rb3rn/ollama-legacy@sha256:f4afde4402e55d28af4d09e36d4c7c6c12fa226c83746bbb7baac253dbedb719`: GitHub Actions run 37688616665,
+revision `738c694`, Ollama v0.40.0 / llama.cpp b11351, tag `candidate-37688616665-1-cuda12-maxwell-native` (from the next CI run on also
+`cuda12-maxwell-0.40.0`). All four instances use it, mount `blobs` and the legacy `manifests` of `/opt/ollama/models` read-only and write to a
+private directory each (`n04-v040-rtx`, `n04-v040-rgtx`, `n04-v040`, `n04-v040-guard`). The previous containers are stopped and kept as
+`ollama-pre-gh040-…`, `ollama-rgtx-pre-gh040-…`, `ollama-m10-pre-gh040-…` and `ollama-m60-guard-pre-gh040-…` (2026-10-08).
+
+| Setting | `ollama` (:11434) | `ollama-rgtx` (:11435) |
+|---|---|---|
+| Cards | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | RTX 2060 + GTX 1060 (6 GiB) |
+| Context / batch | 262144 / 512 | 262144 / 512 |
+| `LLAMA_ARG_FIT_TARGET` / `OLLAMA_DRAFT_NUM_PREDICT` / `LLAMA_ARG_MMPROJ_OFFLOAD` | 256 / 0 / true | 256 / 0 / true |
+| `OLLAMA_SCHED_SPREAD` | true | false |
+| Model checked | `qwen3.6:35b`, 42/42 layers | `moe-sovereign-planner-9b`, 33/33 layers |
+| Replaces | the 0.35.1 fork build `pipefix-20261005` | stock Ollama 0.35.0 |
+
+The same image serves the two Tesla instances:
 
 | Setting | `ollama-m10` (:11436) | `ollama-m60-guard` (:11442) |
 |---|---|---|
@@ -63,7 +80,7 @@ All instances: batch 64 (host buffer 17–33 MiB), flash attention, q4_0 KV cach
 | `GGML_CUDA_GRAPHS_LEGACY` / `LLAMA_ARG_MMPROJ_OFFLOAD` | 1 / true | – / false |
 | `OLLAMA_SCHED_SPREAD` / `OLLAMA_MAX_LOADED_MODELS` | true / 1 | false / 1 |
 | Model store | `blobs` and `manifests` of `/opt/ollama/models` read-only, private directory `/opt/ollama/models/n04-v040` | same, private directory `…/n04-v040-guard` |
-| Replaces | `ollama-tesla-bonsai` (Bonsai build, Ollama 0.34.1; stopped as `…-pre-v040-20261007-210927`) | previous `ollama-m60-guard` (stopped as `…-pre-v040-20261007-210927`) |
+| Replaces | `ollama-tesla-bonsai` (Bonsai build, Ollama 0.34.1; stopped as `…-pre-v040-20261007-210927`), then the local v0.40.0 build | previous `ollama-m60-guard` (stopped as `…-pre-v040-20261007-210927`), then the local v0.40.0 build |
 
 Bonsai models (`bonsai2:27b-pq2_0`) are no longer served on `:11436`. Measurements: [TUNING.md](TUNING.md#ollama-v0400-llamacpp-b11351).
 
@@ -90,12 +107,12 @@ The deployed state of all hosts lives in the `main` branch of the deployment rep
 
 | Host | Files | Services |
 |---|---|---|
-| N04-RTX | `llm-studio/worker-rtx/docker-compose.yml` with `.env.stock-rtx`, `.env.stock-rgtx`, `.env.tesla`; `docker-compose.m60-guard.yml`; `docker-compose.m10-pool.yml`; `update.sh` | `ollama` (:11434), `ollama-rgtx` (:11435, stock), `ollama-m60-guard` (:11442), `ollama-m10` (:11436), ComfyUI |
+| N04-RTX | `llm-studio/worker-rtx/docker-compose.yml` with `.env.stock-rtx`, `.env.stock-rgtx`, `.env.tesla`; `docker-compose.rtx-pool.yml` (`.env.rtx-pool`), `docker-compose.rgtx.yml` (`.env.rgtx`), `docker-compose.m10-pool.yml`, `docker-compose.m60-guard.yml` | `ollama` (:11434), `ollama-rgtx` (:11435, stock), `ollama-m60-guard` (:11442), `ollama-m10` (:11436), ComfyUI |
 | N02-M60 | `llm-studio/worker-m60/docker-compose.yml` with `.env.m60-pool` and `.env.m60-single`; alternative layout `docker-compose.single12.yml` with `.env.m60-single12` | `ollama-m60-pool` (:11434) and `ollama-m60-gpu4` … `ollama-m60-gpu11` (:11435–11442), one endpoint per AI-Village agent |
 | N11-M10 | `llm-studio/worker-tesla/docker-compose.yml` (JSON) | `ollama` (:11434) |
 | Control host | `llm-studio/vm-without-gpu/docker-compose.yml` | `open-webui`, `searxng` |
 
-`ollama-m10` and `ollama-m60-guard` are started from their own Compose files (`docker compose -p n04-m10 -f docker-compose.m10-pool.yml up -d`, `-p n04-guard -f docker-compose.m60-guard.yml`).
+Each N04 instance is started from its own Compose file with its own project name (`docker compose -p n04-gh-rtx -f docker-compose.rtx-pool.yml up -d`, likewise `n04-gh-rgtx`, `n04-gh-m10`, `n04-gh-guard`); the old shared `docker-compose.yml` and `update.sh` were removed.
 The Compose file of N04-RTX includes `ollama-m60-guard` via `extends` from `docker-compose.m60-guard.yml`.
 The ignored `.env` files (among others `worker-tesla/.env`, `worker-legacy-gpu/.env`, `worker-host/.env`) exist only on the hosts.
 
