@@ -22,7 +22,7 @@ base (fixes, documentation) move on after the tag, so the tag stays at the state
 | `v0.34.4` | `f8eb7f3` | Ollama v0.34.4 | same |
 | `v0.35.1` | `26ef996` | Ollama v0.35.1, llama.cpp b11232 | last commit based on 0.35.1 (`BONSAI=OFF`); the images `pipefix-20261005` and `kolibri-20261006` were built from this line |
 | `v0.40.0` | `738c694` | Ollama v0.40.0, llama.cpp b11351 | the GitHub Actions candidates of run 37688616665 carry this revision |
-| `v0.40.1` | `b22a75e` | Ollama v0.40.1, llama.cpp b11351 | run 37744806101 (`cuda12-maxwell-0.40.1`); validated on the four N04-RTX instances |
+| `v0.40.1` | `b22a75e` | Ollama v0.40.1, llama.cpp b11351 | run 37744806101 (`cuda12-maxwell-0.40.1`); validated on the four N04-RTX instances and N11-M10, observed on N02-M60 |
 
 Not tagged: the bases v0.31.x and v0.32.0–v0.32.14, for which images exist in the registry but the history has no commit that identifies
 them. The tags of the older bases point to the state at which the release workflow recorded the version, not to a verified hardware release.
@@ -38,5 +38,5 @@ them. The tags of the older bases point to the state at which the release workfl
 `<variant>` is `cuda12-maxwell`, `cuda11-legacy` or `cuda13-rtx`. The workflow resolves the newest published Ollama release, so the version tag follows
 that release, not the base that was validated on the hosts: run 37744806101 (revision `b22a75e`) built Ollama v0.40.1 (tag `cuda12-maxwell-0.40.1`), while
 the digest deployed on N04-RTX is the v0.40.0 build of run 37688616665, which predates the version tags and is reachable only through its candidate tag
-`candidate-37688616665-1-cuda12-maxwell-native`. The v0.40.1 build was validated on the four N04-RTX instances on 2026-10-08 and is tagged `v0.40.1` (revision `b22a75e`). All hosts now run the GitHub-built digest of run 37688616665. The local images used earlier
+`candidate-37688616665-1-cuda12-maxwell-native`. The v0.40.1 build was validated on the four N04-RTX instances on 2026-10-08, is tagged `v0.40.1` (revision `b22a75e`) and runs on all three hosts. All hosts now run the GitHub-built digest of run 37744806101 (v0.40.1). The local images used earlier
 (`ollama-gaps:pipefix-20261005`, `ollama-gaps:kolibri-20261006`, `ollama-gaps:v040-20261007`) were built from the commits named above and remain on the hosts only for rollback.

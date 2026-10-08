@@ -1,0 +1,1 @@
+{"tag": "V0401-n11", "port": 11434, "container": "ollama", "model": "qwen3.6:35b", "load_s": 110.0, "ok": true, "decode": [9.3, 9.4, 9.2], "prefill": 25.0, "layers": "42/42", "n_ctx": "262144", "n_batch": "64", "host_buf": "32.77", "cuda_errors": 0, "gpu_pct": 100.0, "version": "0.40.1", "answer": "391", "ts": "2026-10-08T23:34:19"}

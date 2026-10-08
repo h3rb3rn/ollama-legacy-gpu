@@ -6,7 +6,7 @@ The Ollama instances of N04-RTX, N02-M60 and N11-M10 and the state of the deploy
 Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and nothing in RAM, `qwen3.6:35b` primary and warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live state (all hosts on the GitHub-built fork image: N04-RTX on Ollama v0.40.1, `ghcr.io/h3rb3rn/ollama-legacy@sha256:258e1d37…`, run 37744806101; N11-M10 and N02-M60 on Ollama v0.40.0, `…@sha256:f4afde44…`, run 37688616665)
+## Live state (all hosts on the GitHub-built fork image, Ollama v0.40.1, `ghcr.io/h3rb3rn/ollama-legacy@sha256:258e1d37…`, run 37744806101, tag `cuda12-maxwell-0.40.1`)
 
 | Setting | N04-RTX | N02-M60 (pool, `:11434`) | N11-M10 |
 |---|---|---|---|
@@ -23,13 +23,13 @@ Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and no
 | `GGML_CUDA_GRAPHS_LEGACY` | – | – | 1 |
 | `LLAMA_PIPELINE_PARALLEL` | not set (pipeline on) | 0 | 0 |
 | Layers / effective context | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
-| Decode / prefill (tok/s) | 40–43 / 1028–1148 (v0.40.0; 42.3 / 1140–1172 on 0.35.1) | 15.0–16.0 / 91–93 | 9.2–9.3 / 24.8 (v0.40.0; 9.3 / 24.2 on 0.35.1) |
+| Decode / prefill (tok/s) | 40.0–42.5 / 1000–1136 (v0.40.1; 42.3 / 1140–1172 on 0.35.1) | 15.0–16.0 / 91–93 | 9.2–9.4 / 25.0 (v0.40.1; 9.3 / 24.2 on 0.35.1) |
 | Not in VRAM according to `/api/ps` | 0 MiB | 0 MiB | 0 MiB |
 | Host buffer `CUDA_Host compute` | 1029 MiB | 32.8 MiB | 32.8 MiB |
 
 Measurements, method and rationale of the settings: [TUNING.md](TUNING.md).
 
-### N02-M60 AI-Village endpoints (Ollama v0.40.0, GitHub-built image)
+### N02-M60 AI-Village endpoints (Ollama v0.40.1, GitHub-built image)
 
 One endpoint per agent; the port -> agent mapping is part of the agents' configuration (`OLLAMA_URL`) and must not change. The server-side
 `OLLAMA_CONTEXT_LENGTH` of each instance equals the `num_ctx` its agent requests. Model store: `blobs` and `manifests` of `/opt/ollama/models`
@@ -49,13 +49,21 @@ Checked by loading each agent's model with its context (`docs/evidence/n02-villa
 | 11442 | `ollama-m60-gpu11` | GPU11 | 09-chronicler | `hf.co/webAI-Official/TwIL-LM3-Pro:Q4_K_M` | 131072 | 41/41 | 100 % | 22.4 / 21.6 |
 
 All instances: batch 64 (host buffer 17–33 MiB), flash attention, q4_0 KV cache, MTP off, no CUDA errors. Think level, `num_predict` and
-`keep_alive` come with each request and were not part of the check. The previous containers (local v0.40.0 build, 2026-10-08 14:31–14:40) are stopped as `ollama-m60-*-pre-gh040-20261008-143125`;
+`keep_alive` come with each request and were not part of the check. Switched to v0.40.1 one endpoint at a time on 2026-10-08 (23:40–23:53, previous containers stopped as `ollama-m60-*-pre-gh0401-20261008-23…`); verified only by observation (`/api/ps`, container logs: `docs/evidence/n02-village-2026-10-07/` and `…/n04-github-image-rollout-2026-10-08/n02-v0401-passive-check.txt`), no test requests were sent to the live endpoints.
+The v0.40.0 containers from the earlier swap (stopped as `ollama-m60-*-pre-gh040-20261008-143125`) and
 the 12-GPU container (Kolibri-1) is stopped as `ollama-m60-12-pre-village-20261007-233313`. The King's pool generated 39 long agent answers at a median of
 7.8 tok/s (7.0–8.7) on the previous container and 8.3 tok/s on the first long answer of the new one (all nine endpoints busy).
 
-### N11-M10 (Ollama v0.40.0, GitHub-built image)
+**Assignment changed on 2026-10-08.** According to the village session the agents now request `qwen3.5:4b` with context 262144 on `:11435`, `:11436`, `:11437`, `:11438` and `:11441`
+(the table above lists the assignment of 2026-10-07 and the decode values measured on it) and send `num_batch 64`, `num_ctx`, `num_predict`, `temperature`, `keep_alive 24h` and, unless
+think is off, `think` with every request; a preload must carry the same options, otherwise Ollama reloads the model on the next agent request. The loaded models on the
+endpoints confirm it (`n_ctx 262144`, `n_batch 64`, 100 % on the GPU). The server-side default `OLLAMA_CONTEXT_LENGTH` of `:11436`, `:11437` and `:11438` is still 131072 in the compose file;
+it is overridden by the per-request `num_ctx`.
 
-`ollama` (:11434), 4× Tesla M10, the same digest as the N04-RTX instances (`sha256:f4afde44…`, run 37688616665). Settings unchanged from the Ollama 0.35.1 instance
+### N11-M10 (Ollama v0.40.1, GitHub-built image)
+
+`ollama` (:11434), 4× Tesla M10, the same digest as the N04-RTX instances (`sha256:258e1d37…`, run 37744806101). Switched to v0.40.1 on 2026-10-08 23:29
+(from v0.40.0, stopped as `ollama-pre-gh0401-20261008-232920`); check with `qwen3.6:35b`: 9.3 / 9.4 / 9.2 tok/s decode, 25.0 tok/s prefill, 42/42 layers, 100 % on the GPUs, no CUDA errors. Settings unchanged from the Ollama 0.35.1 instance
 (see the table above); the shared model store is mounted read-only (private directory `/opt/ollama/models/n11-v040`). The previous container is stopped and kept as
 `ollama-pre-gh040-20261008-140513` (image `ollama-gaps:pipefix-20261005`), so it can be started again. Rollout check (`qwen3.6:35b`): 9.3 / 9.3 / 9.2 tok/s decode,
 24.8 tok/s prefill, 42/42 layers, 100 % on the GPUs, no CUDA errors (before: 8.7 / 8.9 / 8.9 and 24.8).

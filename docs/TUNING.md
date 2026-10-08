@@ -271,7 +271,8 @@ Bonsai models as unreadable (`unsupported tensor "output.weight"`).
 | `:11436`, 4× M10 | `qwen3.6:35b` | 8.9 / 8.9 / 8.8 tok/s, 32.5 tok/s | 8.9 / 8.9 / 8.8 tok/s, 31.7 tok/s | 42/42, 100 % |
 | `:11442`, 2× M60 | `llama-guard3:8b` | 29.8 / 31.5 / 31.1 tok/s, 227 tok/s | 30.3 / 32.1 / 32.8 tok/s, 228 tok/s | 33/33, 100 % |
 
-v0.40.1 equals v0.40.0 within the noise; no CUDA errors, no restarts, no new log errors. The upstream difference between the two is small (nine
+N11-M10 (4× M10, `qwen3.6:35b`): 9.3 / 9.4 / 9.2 tok/s decode and 25.0 tok/s prefill on v0.40.1 against 9.3 / 9.3 / 9.2 and 24.8 on v0.40.0 (42/42, 100 %).
+On N02-M60 the swap was observed only (see docs/FLEET-STATE.md). v0.40.1 equals v0.40.0 within the noise; no CUDA errors, no restarts, no new log errors. The upstream difference between the two is small (nine
 commits: cloud usage API proxy, Windows fixes, MLX patch, documentation). On `:11434` both v0.40.x builds decode about 4 % slower than the 0.35.1
 build measured on the same instance earlier (mean 42.6 over three runs, 42.3 / 41.6 in the earlier documentation); the runs were not interleaved, so this
 remains a small unconfirmed difference. A 5th run of the prefill reported 3218 tok/s because a prompt prefix was cached; excluded.
