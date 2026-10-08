@@ -23,7 +23,7 @@ Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and no
 | `GGML_CUDA_GRAPHS_LEGACY` | – | – | 1 |
 | `LLAMA_PIPELINE_PARALLEL` | not set (pipeline on) | 0 | 0 |
 | Layers / effective context | 42/42, `-c 262144` | 42/42, `-c 262144` | 42/42, `-c 262144` |
-| Decode / prefill (tok/s) | 42.3 / 1140–1172 | 15.0–16.0 / 91–93 | 9.3 / 24.2 |
+| Decode / prefill (tok/s) | 40–43 / 1028–1148 (v0.40.0; 42.3 / 1140–1172 on 0.35.1) | 15.0–16.0 / 91–93 | 9.3 / 24.2 |
 | Not in VRAM according to `/api/ps` | 0 MiB | 0 MiB | 0 MiB |
 | Host buffer `CUDA_Host compute` | 1029 MiB | 32.8 MiB | 32.8 MiB |
 
