@@ -60,6 +60,11 @@ the 12-GPU container (Kolibri-1) is stopped as `ollama-m60-12-pre-village-202610
 `ollama-pre-gh040-20261008-140513` (image `ollama-gaps:pipefix-20261005`), so it can be started again. Rollout check (`qwen3.6:35b`): 9.3 / 9.3 / 9.2 tok/s decode,
 24.8 tok/s prefill, 42/42 layers, 100 % on the GPUs, no CUDA errors (before: 8.7 / 8.9 / 8.9 and 24.8).
 
+**Do not send test requests to a live village endpoint.** While the agents were active, check requests to the King's pool (`:11434`) alternated with the
+agents' requests and made Ollama reload the model repeatedly: 7 loads of `qwen3.6:35b` in 65 minutes against 2 loads in 15 hours on the previous container
+(each load takes about 2.5 minutes, requests wait during that time; one agent request ended with HTTP 499 after 38 minutes). After the checks stopped, the model
+stayed loaded and the agents generated normally. Observe a live endpoint with `/api/ps` and the container log only; run checks while the village is paused.
+
 ### N04-RTX instances (Ollama v0.40.0, GitHub-built image)
 
 Image `ghcr.io/h3rb3rn/ollama-legacy@sha256:f4afde4402e55d28af4d09e36d4c7c6c12fa226c83746bbb7baac253dbedb719`: GitHub Actions run 37688616665,
