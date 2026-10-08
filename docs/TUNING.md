@@ -244,7 +244,7 @@ host, not the Ollama version; with the tuned configuration below the same hardwa
 
 For reference N11-M10 (also 4× M10, Ollama 0.35.1): 9.3 tok/s decode and 24.2 tok/s prefill.
 
-**GitHub-built image on all four N04-RTX instances** (2026-10-08; image from GitHub Actions run 37688616665, revision `738c694`, digest-pinned;
+**GitHub-built image on the four N04-RTX instances and on N11-M10** (2026-10-08; image from GitHub Actions run 37688616665, revision `738c694`, digest-pinned;
 same models and script before and after, raw data in `docs/evidence/n04-github-image-rollout-2026-10-08/`):
 
 | Instance | Model | Before (decode / prefill) | After (decode / prefill) | Layers / on GPU |
@@ -253,6 +253,7 @@ same models and script before and after, raw data in `docs/evidence/n04-github-i
 | `:11435`, RTX 2060 + GTX 1060 (stock 0.35.0 → fork v0.40.0) | `moe-sovereign-planner-9b` | 22.7 / 22.9 / 21.9 tok/s, 585 tok/s | 24.3 / 24.4 / 24.4 tok/s, 697 tok/s | 33/33, 100 % |
 | `:11436`, 4× M10 (local v0.40.0 build → CI image) | `qwen3.6:35b` | 9.0 / 8.9 / 8.7 tok/s, 31.6 tok/s | 8.9 / 8.9 / 8.8 tok/s, 32.5 tok/s | 42/42, 100 % |
 | `:11442`, 2× M60 (local v0.40.0 build → CI image) | `llama-guard3:8b` | 29.6 / 32.5 / 32.1 tok/s, 228 tok/s | 29.8 / 31.5 / 31.1 tok/s, 227 tok/s | 33/33, 100 % |
+| N11-M10 `:11434`, 4× M10 (fork 0.35.1 → v0.40.0) | `qwen3.6:35b` | 8.7 / 8.9 / 8.9 tok/s, 24.8 tok/s | 9.3 / 9.3 / 9.2 tok/s, 24.8 tok/s | 42/42, 100 % |
 
 No CUDA errors. The CI image builds ten CUDA architectures instead of five; the Tesla instances show no difference. On `:11434` the decode is about
 4 % lower on average (40.7 against 42.5 tok/s over the repeats) while the prefill is equal; with single runs on a host with 4 vCPUs this is within
