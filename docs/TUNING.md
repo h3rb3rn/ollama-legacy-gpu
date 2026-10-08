@@ -261,6 +261,21 @@ the spread, a regression is neither shown nor excluded (an interleaved A/B on th
 from the fork build and v0.40.0. The v0.40.0 logs warn about models without a chat template (`moe-sovereign-planner-olmo3-7b`) and report the
 Bonsai models as unreadable (`unsupported tensor "output.weight"`).
 
+**v0.40.1 on the four N04-RTX instances** (2026-10-08, image of run 37744806101, revision `b22a75e`; same models and script; raw data
+`docs/evidence/n04-github-image-rollout-2026-10-08/n04-v0401.jsonl`):
+
+| Instance | Model | v0.40.0 (decode / prefill) | v0.40.1 (decode / prefill) | Layers / on GPU |
+|---|---|---|---|---|
+| `:11434`, RTX 2060 ×2 + RTX 3060 | `qwen3.6:35b` | 37.8–42.8 tok/s (mean 40.6 over 9 runs), 1028–1148 tok/s | 40.0–42.5 tok/s (mean 40.9 over 9 runs), 1000 / 1136 tok/s | 42/42, 100 % |
+| `:11435`, RTX 2060 + GTX 1060 | `moe-sovereign-planner-9b` | 24.3 / 24.4 / 24.4 tok/s, 697 tok/s | 23.8 / 23.6 / 24.1 tok/s, 693 tok/s | 33/33, 100 % |
+| `:11436`, 4× M10 | `qwen3.6:35b` | 8.9 / 8.9 / 8.8 tok/s, 32.5 tok/s | 8.9 / 8.9 / 8.8 tok/s, 31.7 tok/s | 42/42, 100 % |
+| `:11442`, 2× M60 | `llama-guard3:8b` | 29.8 / 31.5 / 31.1 tok/s, 227 tok/s | 30.3 / 32.1 / 32.8 tok/s, 228 tok/s | 33/33, 100 % |
+
+v0.40.1 equals v0.40.0 within the noise; no CUDA errors, no restarts, no new log errors. The upstream difference between the two is small (nine
+commits: cloud usage API proxy, Windows fixes, MLX patch, documentation). On `:11434` both v0.40.x builds decode about 4 % slower than the 0.35.1
+build measured on the same instance earlier (mean 42.6 over three runs, 42.3 / 41.6 in the earlier documentation); the runs were not interleaved, so this
+remains a small unconfirmed difference. A 5th run of the prefill reported 3218 tok/s because a prompt prefix was cached; excluded.
+
 **Model store and the manifest migration.** v0.40.0 creates `manifests-v2` and `metadata` next to the legacy `manifests` directory and
 converts Ollama-format models in the background (disk estimate: converted size + 25 % + 512 MiB). The N04 containers share
 `/opt/ollama/models` with other Ollama versions, so the two v0.40.0 instances mount `blobs` and the legacy `manifests` read-only and write

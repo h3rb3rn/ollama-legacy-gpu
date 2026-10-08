@@ -9,12 +9,12 @@ and [Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2
 The fork is built on top of an official Ollama release (the patch scripts are applied at build time). The validated base is
 **Ollama v0.40.0** (llama.cpp b11351) with `BONSAI=OFF`; the patches apply unchanged and perform like the previous base (A/B on N02-M60,
 see [docs/TUNING.md](docs/TUNING.md)). GitHub Actions builds the newest Ollama release: the newest image `cuda12-maxwell-0.40.1`
-(revision `b22a75e`) is based on v0.40.1 (nine commits after v0.40.0 without llama.cpp or CUDA changes) and not yet validated on hardware.
+(revision `b22a75e`) is based on v0.40.1 (nine commits after v0.40.0 without llama.cpp or CUDA changes); it is validated and running on N04-RTX.
 
-- **N04-RTX:** all four Ollama instances (`:11434`, `:11435`, `:11436`, `:11442`) run the GitHub Actions image of run 37688616665
-  (v0.40.0, revision `738c694`, `ghcr.io/h3rb3rn/ollama-legacy`, digest-pinned).
-- **N02-M60:** the nine AI-Village endpoints run the same image (digest-pinned, v0.40.0).
-- **N11-M10:** the same GitHub Actions image (digest-pinned, v0.40.0).
+- **N04-RTX:** all four Ollama instances (`:11434`, `:11435`, `:11436`, `:11442`) run the GitHub Actions image of run 37744806101
+  (v0.40.1, revision `b22a75e`, tag `cuda12-maxwell-0.40.1`, `ghcr.io/h3rb3rn/ollama-legacy`, digest-pinned).
+- **N02-M60:** the nine AI-Village endpoints run the v0.40.0 image of run 37688616665 (digest-pinned).
+- **N11-M10:** the GitHub Actions image of run 37688616665 (digest-pinned, v0.40.0).
 
 `qwen3.6:35b` (35.5B, Q4_K_M) runs with a **262144-token context, q4_0 KV cache and all 42 layers on the GPUs** on the pooled instances. Weights,
 KV cache and compute buffers live in VRAM; only small pinned staging buffers stay in host memory.
@@ -23,15 +23,15 @@ Measured 2026-10-07/08 with `scripts/bench-throughput.sh`-style runs (120-token 
 
 | Host / instance | GPUs | Model | Batch | Pipeline | Decode | Prefill | Host buffer |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| N04-RTX `:11434` | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | `qwen3.6:35b` | 512 | on | 37.8–42.8 tok/s | 1028–1148 tok/s | 1041 MiB |
-| N04-RTX `:11435` | RTX 2060 + GTX 1060 (6 GiB) | `moe-sovereign-planner-9b` | 512 | on | 24.3–24.4 tok/s | 697 tok/s | 1057 MiB |
-| N04-RTX `:11436` | 4× Tesla M10 (8 GiB) | `qwen3.6:35b` | 64 | off | 8.8–8.9 tok/s | 32.5 tok/s | 32.8 MiB |
-| N04-RTX `:11442` | 2× Tesla M60 (8 GiB), context 32768 | `llama-guard3:8b` / `qwen3.5:9b` | 1024 (default) | off | 29.8–31.5 / 13.1–13.2 tok/s | 227 / 166 tok/s | 80 MiB |
+| N04-RTX `:11434` | 2× RTX 2060 + 1× RTX 3060 (12 GiB) | `qwen3.6:35b` | 512 | on | 40.0–42.5 tok/s (v0.40.1; 37.8–42.8 on v0.40.0) | 1000–1136 tok/s | 1041 MiB |
+| N04-RTX `:11435` | RTX 2060 + GTX 1060 (6 GiB) | `moe-sovereign-planner-9b` | 512 | on | 23.6–24.1 tok/s (v0.40.1; 24.3–24.4 on v0.40.0) | 693 tok/s | 1057 MiB |
+| N04-RTX `:11436` | 4× Tesla M10 (8 GiB) | `qwen3.6:35b` | 64 | off | 8.8–8.9 tok/s | 31.7 tok/s | 32.8 MiB |
+| N04-RTX `:11442` | 2× Tesla M60 (8 GiB), context 32768 | `llama-guard3:8b` / `qwen3.5:9b` | 1024 (default) | off | 30.3–32.8 / 13.1–13.2 tok/s | 228 / 166 tok/s | 80 MiB |
 | N02-M60 `:11434` (pool) | 4× Tesla M60 (8 GiB) | `qwen3.6:35b` | 64 | off | 13.1–15.8 tok/s idle; 7–8.7 tok/s while all nine agents are busy | 84–85 tok/s | 32.8 MiB |
 | N02-M60 `:11435–11442` | 1× Tesla M60 each, one endpoint per AI-Village agent | 3–4B models, 131072/262144 context | 64 | – | 14.2–23.6 tok/s (one run 12.5), agents active | – | 17–33 MiB |
 | N11-M10 `:11434` | 4× Tesla M10 (8 GiB) | `qwen3.6:35b` | 64 | off | 9.2–9.3 tok/s | 24.8 tok/s | 32.8 MiB |
 
-The `:11442` values for `qwen3.5:9b` come from the local build of the same code, the idle values of the N02-M60 pool from the A/B test with the CI candidate of the same base; all other rows are from the GitHub image. One repeat on `:11434` reported 3445 tok/s prefill because a prompt prefix was served from the cache; it is excluded. N04-RTX has 4 vCPUs
+The `:11442` values for `qwen3.5:9b` come from the local build of the same code, the idle values of the N02-M60 pool from the A/B test with the CI candidate of the same base; the N04 rows are from the v0.40.1 image, the others from the v0.40.0 image. One repeat on `:11434` reported 3445 tok/s prefill because a prompt prefix was served from the cache; it is excluded. N04-RTX has 4 vCPUs
 and a high base load, which is why the Tesla rows are below the N02-M60 values for comparable cards.
 
 - [What the fork does differently from stock](docs/FORK-VS-STOCK.md) – patches, scripts, per-image patch matrix, environment variables.

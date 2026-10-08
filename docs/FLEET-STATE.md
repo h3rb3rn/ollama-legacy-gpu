@@ -6,7 +6,7 @@ The Ollama instances of N04-RTX, N02-M60 and N11-M10 and the state of the deploy
 Requirements for the instances: 256k KV cache at q4_0, everything in VRAM and nothing in RAM, `qwen3.6:35b` primary and warm
 (`MAX_LOADED_MODELS=1`, `NUM_PARALLEL=1`, `KEEP_ALIVE` 24 h).
 
-## Live state (all hosts on Ollama v0.40.0, GitHub-built image `ghcr.io/h3rb3rn/ollama-legacy@sha256:f4afde44…`, run 37688616665)
+## Live state (all hosts on the GitHub-built fork image: N04-RTX on Ollama v0.40.1, `ghcr.io/h3rb3rn/ollama-legacy@sha256:258e1d37…`, run 37744806101; N11-M10 and N02-M60 on Ollama v0.40.0, `…@sha256:f4afde44…`, run 37688616665)
 
 | Setting | N04-RTX | N02-M60 (pool, `:11434`) | N11-M10 |
 |---|---|---|---|
@@ -65,11 +65,12 @@ agents' requests and made Ollama reload the model repeatedly: 7 loads of `qwen3.
 (each load takes about 2.5 minutes, requests wait during that time; one agent request ended with HTTP 499 after 38 minutes). After the checks stopped, the model
 stayed loaded and the agents generated normally. Observe a live endpoint with `/api/ps` and the container log only; run checks while the village is paused.
 
-### N04-RTX instances (Ollama v0.40.0, GitHub-built image)
+### N04-RTX instances (Ollama v0.40.1, GitHub-built image)
 
-Image `ghcr.io/h3rb3rn/ollama-legacy@sha256:f4afde4402e55d28af4d09e36d4c7c6c12fa226c83746bbb7baac253dbedb719`: GitHub Actions run 37688616665,
-revision `738c694`, Ollama v0.40.0 / llama.cpp b11351, tag `candidate-37688616665-1-cuda12-maxwell-native` (this build predates the
-version tags; the newest CI build `cuda12-maxwell-0.40.1` is based on Ollama v0.40.1 and not deployed). All four instances use it, mount `blobs` and the legacy `manifests` of `/opt/ollama/models` read-only and write to a
+Image `ghcr.io/h3rb3rn/ollama-legacy@sha256:258e1d37f8362c09d664f1abf1c1c63c8077e194682da542951d0ec7b2e566fa`: GitHub Actions run 37744806101,
+revision `b22a75e`, Ollama v0.40.1 / llama.cpp b11351, tag `cuda12-maxwell-0.40.1`. Switched on 2026-10-08 (21:02–21:13) from the v0.40.0 image of run
+37688616665 (`sha256:f4afde44…`, tag `candidate-37688616665-1-cuda12-maxwell-native`); the v0.40.0 containers are stopped as `…-pre-gh0401-20261008-21…`
+(the 0.35.1/local-build containers `…-pre-gh040-…` also still exist). All four instances use it, mount `blobs` and the legacy `manifests` of `/opt/ollama/models` read-only and write to a
 private directory each (`n04-v040-rtx`, `n04-v040-rgtx`, `n04-v040`, `n04-v040-guard`). The previous containers are stopped and kept as
 `ollama-pre-gh040-…`, `ollama-rgtx-pre-gh040-…`, `ollama-m10-pre-gh040-…` and `ollama-m60-guard-pre-gh040-…` (2026-10-08).
 
