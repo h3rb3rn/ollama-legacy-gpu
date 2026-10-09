@@ -4,6 +4,10 @@ All notable changes to this fork are documented here.
 
 ---
 
+## [Unreleased] — 2026-10-09
+
+- **Cleanup of rollback containers:** on N04-RTX, N11-M10 and N02-M60 all stopped Ollama containers except the latest generation (`…-pre-gh0401-…`, the v0.40.0 containers) were removed (18 + 6 + 10): earlier 0.35.1 / stock 0.35.0 / local v0.40.0 builds, the Bonsai production container and its test containers, the 12-GPU Kolibri-1 container. Images and model data were not touched; Bonsai and the Kolibri layout can be recreated from the compose files in the Git history and the images that remain on the hosts.
+
 ## [Unreleased] — 2026-10-08
 
 - **N04-RTX rollout:** all four Ollama instances (`:11434`, `:11435`, `:11436`, `:11442`) run the GitHub Actions image of run 37688616665 (Ollama v0.40.0, revision `738c694`, digest-pinned). Validation against the previous state with the same models: `:11435` (stock 0.35.0 → fork) +7 % decode, +19 % prefill; the Tesla instances unchanged; `:11434` prefill equal, decode about 4 % lower on average (single runs). See [docs/TUNING.md](docs/TUNING.md).

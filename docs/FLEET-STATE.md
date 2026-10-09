@@ -50,8 +50,7 @@ Checked by loading each agent's model with its context (`docs/evidence/n02-villa
 
 All instances: batch 64 (host buffer 17–33 MiB), flash attention, q4_0 KV cache, MTP off, no CUDA errors. Think level, `num_predict` and
 `keep_alive` come with each request and were not part of the check. Switched to v0.40.1 one endpoint at a time on 2026-10-08 (23:40–23:53, previous containers stopped as `ollama-m60-*-pre-gh0401-20261008-23…`); verified only by observation (`/api/ps`, container logs: `docs/evidence/n02-village-2026-10-07/` and `…/n04-github-image-rollout-2026-10-08/n02-v0401-passive-check.txt`), no test requests were sent to the live endpoints.
-The v0.40.0 containers from the earlier swap (stopped as `ollama-m60-*-pre-gh040-20261008-143125`) and
-the 12-GPU container (Kolibri-1) is stopped as `ollama-m60-12-pre-village-20261007-233313`. The King's pool generated 39 long agent answers at a median of
+Older rollback containers (the local v0.40.0 build and the 12-GPU Kolibri-1 container) were removed on 2026-10-09; the layout stays available as `docker-compose.single12.yml`. The King's pool generated 39 long agent answers at a median of
 7.8 tok/s (7.0–8.7) on the previous container and 8.3 tok/s on the first long answer of the new one (all nine endpoints busy).
 
 **Assignment changed on 2026-10-08.** According to the village session the agents now request `qwen3.5:4b` with context 262144 on `:11435`, `:11436`, `:11437`, `:11438` and `:11441`
@@ -64,8 +63,7 @@ it is overridden by the per-request `num_ctx`.
 
 `ollama` (:11434), 4× Tesla M10, the same digest as the N04-RTX instances (`sha256:258e1d37…`, run 37744806101). Switched to v0.40.1 on 2026-10-08 23:29
 (from v0.40.0, stopped as `ollama-pre-gh0401-20261008-232920`); check with `qwen3.6:35b`: 9.3 / 9.4 / 9.2 tok/s decode, 25.0 tok/s prefill, 42/42 layers, 100 % on the GPUs, no CUDA errors. Settings unchanged from the Ollama 0.35.1 instance
-(see the table above); the shared model store is mounted read-only (private directory `/opt/ollama/models/n11-v040`). The previous container is stopped and kept as
-`ollama-pre-gh040-20261008-140513` (image `ollama-gaps:pipefix-20261005`), so it can be started again. Rollout check (`qwen3.6:35b`): 9.3 / 9.3 / 9.2 tok/s decode,
+(see the table above); the shared model store is mounted read-only (private directory `/opt/ollama/models/n11-v040`). The v0.40.0 container is kept stopped (the older 0.35.1 container was removed on 2026-10-09; its image `ollama-gaps:pipefix-20261005` remains). Rollout check (`qwen3.6:35b`): 9.3 / 9.3 / 9.2 tok/s decode,
 24.8 tok/s prefill, 42/42 layers, 100 % on the GPUs, no CUDA errors (before: 8.7 / 8.9 / 8.9 and 24.8).
 
 **Do not send test requests to a live village endpoint.** While the agents were active, check requests to the King's pool (`:11434`) alternated with the
@@ -78,9 +76,8 @@ stayed loaded and the agents generated normally. Observe a live endpoint with `/
 Image `ghcr.io/h3rb3rn/ollama-legacy@sha256:258e1d37f8362c09d664f1abf1c1c63c8077e194682da542951d0ec7b2e566fa`: GitHub Actions run 37744806101,
 revision `b22a75e`, Ollama v0.40.1 / llama.cpp b11351, tag `cuda12-maxwell-0.40.1`. Switched on 2026-10-08 (21:02–21:13) from the v0.40.0 image of run
 37688616665 (`sha256:f4afde44…`, tag `candidate-37688616665-1-cuda12-maxwell-native`); the v0.40.0 containers are stopped as `…-pre-gh0401-20261008-21…`
-(the 0.35.1/local-build containers `…-pre-gh040-…` also still exist). All four instances use it, mount `blobs` and the legacy `manifests` of `/opt/ollama/models` read-only and write to a
-private directory each (`n04-v040-rtx`, `n04-v040-rgtx`, `n04-v040`, `n04-v040-guard`). The previous containers are stopped and kept as
-`ollama-pre-gh040-…`, `ollama-rgtx-pre-gh040-…`, `ollama-m10-pre-gh040-…` and `ollama-m60-guard-pre-gh040-…` (2026-10-08).
+(these are the only rollback containers left on the host). All four instances use it, mount `blobs` and the legacy `manifests` of `/opt/ollama/models` read-only and write to a
+private directory each (`n04-v040-rtx`, `n04-v040-rgtx`, `n04-v040`, `n04-v040-guard`). Rollback containers of earlier generations (0.35.1 fork, stock 0.35.0, local v0.40.0 build, Bonsai and the Bonsai tests of 2026-10-01) were removed on 2026-10-09; the images remain on the host.
 
 | Setting | `ollama` (:11434) | `ollama-rgtx` (:11435) |
 |---|---|---|
@@ -102,7 +99,7 @@ The same image serves the two Tesla instances:
 | `GGML_CUDA_GRAPHS_LEGACY` / `LLAMA_ARG_MMPROJ_OFFLOAD` | 1 / true | – / false |
 | `OLLAMA_SCHED_SPREAD` / `OLLAMA_MAX_LOADED_MODELS` | true / 1 | false / 1 |
 | Model store | `blobs` and `manifests` of `/opt/ollama/models` read-only, private directory `/opt/ollama/models/n04-v040` | same, private directory `…/n04-v040-guard` |
-| Replaces | `ollama-tesla-bonsai` (Bonsai build, Ollama 0.34.1; stopped as `…-pre-v040-20261007-210927`), then the local v0.40.0 build | previous `ollama-m60-guard` (stopped as `…-pre-v040-20261007-210927`), then the local v0.40.0 build |
+| Replaces | `ollama-tesla-bonsai` (Bonsai build, Ollama 0.34.1; container removed 2026-10-09, image `sha256:1170395e1eca…` and the compose in the Git history remain), then the local v0.40.0 build | previous `ollama-m60-guard` (container removed 2026-10-09), then the local v0.40.0 build |
 
 Bonsai models (`bonsai2:27b-pq2_0`) are no longer served on `:11436`. Measurements: [TUNING.md](TUNING.md#ollama-v0400-llamacpp-b11351).
 
