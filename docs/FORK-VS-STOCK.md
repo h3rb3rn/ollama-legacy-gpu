@@ -101,6 +101,7 @@ llama.cpp:
 | `OLLAMA_FORCE_GPU_LAYERS` | `1` = greedy fill: fill GPUs in descending CUDA index order, only as many as needed; replaces the fit | off |
 | `OLLAMA_LAYER_OVERHEAD_SCALE` | factor on the weights per layer in the greedy fill (reserve for compute buffers and KV), 1.0–5.0 | adaptive |
 | `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (llama.cpp variable) | upstream (~2 GiB) |
+| `OLLAMA_BACKEND_URLS` | comma-separated backends for prefix-affinity routing in `ollama-proxy.py` (`scripts/prefix_router.py`); needs the proxy to run | off |
 
 `LLAMA_ARG_FIT_TARGET` is upstream; the fork recommends `256` because, with the embedding in VRAM,
 an expert tensor (210.82 MiB `ffn_down_exps`) otherwise spills into host RAM.

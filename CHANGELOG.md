@@ -4,6 +4,15 @@ All notable changes to this fork are documented here.
 
 ---
 
+## [Unreleased] — 2026-10-15
+
+- **Quality gate:** `scripts/quality-gate.py` compares top-20 logprob distributions (KL) between a baseline and a candidate against the baseline's own run-to-run noise. Validated on N04-RTX (2× Tesla M60, `qwen3.5:9b`): batch 64 against the default batch gives mean KL 0.0000 (PASS); see `docs/TUNING.md`.
+- **Prefix-affinity routing (opt-in):** `OLLAMA_BACKEND_URLS` makes `ollama-proxy.py` send a request to the backend holding the longest shared prompt prefix (`scripts/prefix_router.py`), with a retry on a backend that does not answer. Unset, the proxy behaves as before. The Dockerfiles copy `prefix_router.py`. Needs the proxy to run (`OLLAMA_AUTO_OPTIMIZE=1`).
+- **Benchmarks:** `scripts/bench-agent-turns.py` (prompt re-reading in agent-style conversations) and `scripts/bench-concurrency.py` (one wide instance against several replicas).
+- **Not built:** an online draft-length gate. `draft_num_predict` is a runner option, so changing it per request reloads the model; `auto-optimize.py` keeps choosing it offline.
+
+---
+
 ## [Unreleased] — 2026-10-09
 
 - **Cleanup of rollback containers:** on N04-RTX, N11-M10 and N02-M60 all stopped Ollama containers except the latest generation (`…-pre-gh0401-…`, the v0.40.0 containers) were removed (18 + 6 + 10): earlier 0.35.1 / stock 0.35.0 / local v0.40.0 builds, the Bonsai production container and its test containers, the 12-GPU Kolibri-1 container. Images and model data were not touched; Bonsai and the Kolibri layout can be recreated from the compose files in the Git history and the images that remain on the hosts.

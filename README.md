@@ -54,6 +54,7 @@ and a high base load, which is why the Tesla rows are below the N02-M60 values f
 | `OLLAMA_FORCE_GPU_LAYERS` | `1` replaces the fit by a greedy fill (highest CUDA index first, as few GPUs as needed); Kolibri-1 Q4_K_M uses 8 of 12 Tesla M60 |
 | `OLLAMA_LAYER_OVERHEAD_SCALE` | factor on the per-layer weights in the greedy fill (reserve for compute buffers and KV); `1.10` works on 8 GiB M60, `1.03` runs out of memory |
 | `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` keeps expert tensors such as `ffn_down_exps`, ~211 MiB, out of host memory) |
+| `OLLAMA_BACKEND_URLS` | comma-separated Ollama URLs; the proxy then sends a request to the backend holding the longest shared prompt prefix (first URL = primary). Needs the proxy (`OLLAMA_AUTO_OPTIMIZE=1`); unset = unchanged |
 
 ### Tuning summary
 

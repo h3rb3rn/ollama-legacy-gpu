@@ -298,6 +298,28 @@ writable store changes the layout in a way that older versions cannot read was n
   GPU practically unused; 31.1–31.3 tok/s decode, 277–281 tok/s prefill. The fork loads `42/42` on all GPUs.
 - **Without `LLAMA_ARG_FIT_TARGET=256`** (default fit target) `ffn_down_exps` (210.82 MiB) spills into host memory.
 
+## Quality gate (`scripts/quality-gate.py`)
+
+`compare-batch-quality.py` checks whether the greedy text is identical. `quality-gate.py` also compares the probabilities the
+model assigned to each token (Ollama `logprobs`, top 20 per position) and gives a PASS/FAIL against the run-to-run noise of the
+baseline. Method, thresholds and limits are in the script's docstring. Evidence: `docs/evidence/quality-gate-2026-10-15/`.
+
+Validation on the test container `ollama-strata-m60` (N04-RTX, 2× Tesla M60, `qwen3.5:9b`, context 32768, KV q4_0, FA on, six
+prompts incl. an 18,044-token needle test, greedy, one run per arm):
+
+| Arm | Setting | Result against A1 |
+| --- | --- | --- |
+| A1 | default (`-b 1024 -ub 1024`) | reference |
+| A2 | default, container restarted | mean KL 0.0000, 6/6 texts identical (the noise floor is exactly 0) |
+| B | `OLLAMA_MAX_BATCH_SIZE`/`LLAMA_ARG_BATCH`/`LLAMA_ARG_UBATCH` = 64 (`-b 64 -ub 64`) | mean KL 0.0000, largest KL 0.0001 (needle prompt), 6/6 texts identical, needle found: **PASS** |
+
+So batch 64 and the default batch size give the same distributions up to floating-point noise on this model; this puts a number
+on the earlier "6/6 greedy answers identical" finding (`docs/evidence/batch-quality-2026-10-05`).
+
+Limits: the runs are greedy, not teacher-forced, so only the prefix where both runs agree is compared (position 0 is always
+comparable). The gate was only shown to PASS here; it has not been shown to FAIL on a real degradation (the thresholds are
+unit-tested, not calibrated against a known-bad change). One model, one GPU type, one run per arm.
+
 ## Limits
 
 - Few runs per configuration, no analysis of variance; measurements on hosts with different background load (ComfyUI, further
