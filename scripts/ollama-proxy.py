@@ -52,6 +52,10 @@ VRAM_BEFORE_FILE  = Path("/tmp/vram-before-snapshot.json")
 OPTIMIZE_LOCK        = {}  # model → threading.Event (prevent duplicate runs per model)
 OPTIMIZE_LOCK_MUTEX  = threading.Lock()
 GLOBAL_OPT_SEMAPHORE = threading.Semaphore(1)  # only one optimizer runs at a time
+# Prefix-affinity routing over several backends (OLLAMA_BACKEND_URLS). None = off, and the proxy
+# behaves exactly as before. Set by start_router(); prefix_router.py is imported only then.
+ROUTER = None
+PREFIX_KEYS = None
 
 INFERENCE_PATHS = {"/api/generate", "/api/chat", "/v1/chat/completions",
                    "/v1/responses", "/api/embed", "/api/embeddings"}
@@ -374,6 +378,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 # MTP drafting for denylisted families regardless of cache
                 if sha and body:
                     body = inject_optimal_options(body, model, sha)
+                # Prefix-affinity routing: only when OLLAMA_BACKEND_URLS is set
+                if ROUTER is not None:
+                    return self._forward_routed(method, body, model)
 
         # Forward to backend
         # Use longer timeout for inference/generate paths: large models (llama4:scout 62 GB)
@@ -416,6 +423,69 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _forward_routed(self, method: str, body: bytes, model: str):
+        """Send an inference request to the backend the prefix router picks.
+
+        A backend that cannot be reached before it answers is marked down and the request is
+        tried once more elsewhere. After the first byte reached the client there is no retry.
+        """
+        keys, total = PREFIX_KEYS(_safe_json(body))
+        tried = set()
+        for _ in range(2):
+            target = ROUTER.choose(model, keys, total, exclude=tried)
+            if target is None:
+                break
+            log.debug(f"route model={model} -> {target} keys={len(keys)} chars={total}")
+            tried.add(target)
+            ROUTER.begin(target)
+            ok = False
+            try:
+                ok, may_retry = self._proxy_once(target, method, body)
+            finally:
+                ROUTER.end(target, keys, ok)
+            if ok or not may_retry:
+                return
+            ROUTER.mark_down(target)
+            log.warning(f"backend {target} did not answer, trying another one")
+        try:
+            self.send_error(502, "No backend could answer")
+        except Exception:
+            pass
+
+    def _proxy_once(self, url: str, method: str, body: bytes):
+        """One request to url. Returns (ok, may_retry); may_retry is False once the client got data."""
+        host, port = _host_port(url)
+        skip_headers = {"host", "connection", "transfer-encoding",
+                        "keep-alive", "proxy-connection", "te", "trailers",
+                        "upgrade", "proxy-authorization"}
+        fwd_headers = {k: v for k, v in self.headers.items() if k.lower() not in skip_headers}
+        fwd_headers["Host"] = f"{host}:{port}"
+        if body:
+            fwd_headers["Content-Length"] = str(len(body))
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=1800)
+            conn.request(method, self.path, body=body, headers=fwd_headers)
+            backend_resp = conn.getresponse()
+        except Exception as e:
+            log.warning(f"proxy error ({method} {self.path}) to {url}: {e}")
+            return False, True
+        try:
+            self.send_response(backend_resp.status)
+            for key, val in backend_resp.getheaders():
+                if key.lower() not in {"connection", "transfer-encoding"}:
+                    self.send_header(key, val)
+            self.end_headers()
+            while True:
+                chunk = backend_resp.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except Exception as e:
+            log.warning(f"proxy error while streaming from {url}: {e}")
+            return False, False
+        return True, False
+
     def do_GET(self):
         self._forward("GET", b"")
 
@@ -439,6 +509,45 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
 
 # ── Server startup ────────────────────────────────────────────────────────────
+
+def _host_port(url: str):
+    parsed = urllib.parse.urlparse(url)
+    return parsed.hostname, parsed.port or 80
+
+
+def _safe_json(body: bytes):
+    try:
+        return json.loads(body)
+    except Exception:
+        return None
+
+
+def start_router(urls: list) -> None:
+    """Route inference over several backends. The first URL is the primary (auto-optimize and
+    model lookups still use it)."""
+    global BACKEND_URL, ROUTER, PREFIX_KEYS
+    import prefix_router  # next to this script; imported only when routing is on
+    BACKEND_URL = urls[0]
+    ROUTER = prefix_router.PrefixRouter(urls)
+    PREFIX_KEYS = prefix_router.prefix_keys
+    log.info(f"prefix routing over {len(urls)} backend(s): {', '.join(urls)}")
+    threading.Thread(target=_refresh_models_loop, args=(urls,),
+                     daemon=True, name="route-models").start()
+
+
+def _refresh_models_loop(urls: list) -> None:
+    """Keep each backend's model list current, so a request only goes where its model is."""
+    while True:
+        for url in urls:
+            try:
+                with urllib.request.urlopen(f"{url}/api/tags", timeout=5) as resp:
+                    names = [m.get("name", "") for m in json.loads(resp.read()).get("models", [])]
+                ROUTER.set_models(url, names)
+            except Exception as e:
+                log.debug(f"model list failed for {url}: {e}")
+                ROUTER.mark_down(url)
+        time.sleep(60)
+
 
 class ThreadedHTTPServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
@@ -475,6 +584,9 @@ def main():
             LISTEN_PORT = int(arg.split("=", 1)[1])
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    urls = [u.strip() for u in os.environ.get("OLLAMA_BACKEND_URLS", "").split(",") if u.strip()]
+    if urls:
+        start_router(urls)   # OLLAMA_BACKEND_URLS overrides --backend: its first entry is primary
     wait_for_backend(BACKEND_URL)
 
     server = ThreadedHTTPServer(("0.0.0.0", LISTEN_PORT), ProxyHandler)

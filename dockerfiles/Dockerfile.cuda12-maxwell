@@ -254,6 +254,7 @@ COPY scripts/gpu-detect.sh         /usr/local/bin/gpu-detect.sh
 COPY scripts/ollama-entrypoint.sh  /usr/local/bin/ollama-entrypoint.sh
 COPY scripts/auto-optimize.py      /usr/local/bin/auto-optimize.py
 COPY scripts/ollama-proxy.py       /usr/local/bin/ollama-proxy.py
+COPY scripts/prefix_router.py        /usr/local/bin/prefix_router.py
 RUN chmod +x /usr/local/bin/gpu-detect.sh /usr/local/bin/ollama-entrypoint.sh \
     && chmod +x /usr/local/bin/auto-optimize.py /usr/local/bin/ollama-proxy.py
 
