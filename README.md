@@ -54,6 +54,7 @@ and a high base load, which is why the Tesla rows are below the N02-M60 values f
 | `OLLAMA_FORCE_GPU_LAYERS` | `1` replaces the fit by a greedy fill (highest CUDA index first, as few GPUs as needed); Kolibri-1 Q4_K_M uses 8 of 12 Tesla M60 |
 | `OLLAMA_LAYER_OVERHEAD_SCALE` | factor on the per-layer weights in the greedy fill (reserve for compute buffers and KV); `1.10` works on 8 GiB M60, `1.03` runs out of memory |
 | `LLAMA_ARG_FIT_TARGET` | fit reserve per GPU in MiB (upstream variable; `256` keeps expert tensors such as `ffn_down_exps`, ~211 MiB, out of host memory) |
+| `OLLAMA_RPC_SERVERS` | comma-separated `host:port` of llama.cpp `rpc-server` instances on other hosts; their GPUs join the pool of this instance, so a model larger than one host's VRAM can load (`cuda12-maxwell` only, PoC, see [docs/RPC-POOL.md](docs/RPC-POOL.md)); unset = unchanged |
 | `OLLAMA_BACKEND_URLS` | comma-separated Ollama URLs; the proxy then sends a request to the backend holding the longest shared prompt prefix (first URL = primary). Needs the proxy (`OLLAMA_AUTO_OPTIMIZE=1`); unset = unchanged |
 
 ### Tuning summary
@@ -96,6 +97,28 @@ A first 245k run was invalid (the prompt exceeded the context and was truncated)
 Driver Xid messages could not be checked (`dmesg` is not readable for the test user).
 
 Tables, context ladder and limits: [docs/TUNING.md](docs/TUNING.md).
+
+### Dense 27B model on legacy Tesla GPUs (N04-RTX, 2026-11-13/14)
+
+`qwen3.8:27b-q4_K_M` (dense, 64 layers, 18 GiB) against `qwen3.6:35b` (MoE) on the two Tesla instances of N04-RTX, Q4_K_M weights, `q4_0` KV cache,
+all layers in VRAM, greedy sampling, `/api/chat` without thinking. Prefill prompts of about 135 and 960 tokens, decode over 32 tokens. Two runs shared the
+host (4 CPU cores) at the same time, so single values scatter; read them as orders of magnitude.
+
+| Instance (GPUs) | Model | Context | Load (s) | VRAM (GiB) | Prefill ~135 / ~960 tok (tok/s) | Decode (tok/s) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ollama-m10`, 4× Tesla M10 (32 GiB) | qwen3.8:27b | 131072 | 506 / 518 | 19.9 / 20.1 | 0.2 / 0.5 | 1.69, 0.04 and 0.38, 0.71 (two series) |
+| `ollama-m10`, 4× Tesla M10 | qwen3.6:35b (MoE) | 131072 | 187 | 21.8 | 1.8–16.5 / 2.1–4.8 | 8.4, 5.2 |
+| `ollama-m60-guard`, 2× Tesla M60 + GTX 1060 (21 GiB) | qwen3.8:27b | 65536 | 104 | 17.9 | 21.1 / 43.0 | 2.95, 2.97 |
+
+- **Dense on M10:** prefill stays below 1 tok/s, so long prompts are not usable (a 512-token prompt ran into a 900 s timeout in one series). Decode is below
+  2 tok/s. Maxwell has almost no FP16 throughput and every token passes all 27 B weights; the MoE reads only a fraction of them. The cause was not isolated
+  by a separate test.
+- **256k does not fit:** `qwen3.8:27b` at 262144 runs out of memory on 4× 8 GiB; 131072 is the largest context that loads there.
+- **M60 + GTX 1060:** 21 GiB in total. 131072 left 0.4 GiB per card and a context of 98304 aborted with `CUDA error: out of memory` during the first
+  request (compute buffer); 65536 runs stable. The M60 numbers use half the context of the M10 numbers and a different GPU count, so the two rows are not
+  a like-for-like comparison.
+- **Single runs:** one load per model, prefill with one prompt per size (two for `qwen3.6:35b`), two decode runs. The scatter (decode 0.04 to 1.69 tok/s on
+  the same model and instance) points at CPU contention on the 4-core host; this was not measured.
 
 ## GPU compatibility
 
