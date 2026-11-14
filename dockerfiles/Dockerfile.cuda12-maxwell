@@ -87,6 +87,8 @@ COPY scripts/patch-ollama-dynamic-pool.py /tmp/patch-ollama-dynamic-pool.py
 COPY scripts/patch-ollama-batch.py        /tmp/patch-ollama-batch.py
 COPY scripts/patch-ollama-discovery.py    /tmp/patch-ollama-discovery.py
 COPY scripts/patch-ollama-mtp-default.py  /tmp/patch-ollama-mtp-default.py
+COPY scripts/patch-ollama-rpc.py          /tmp/patch-ollama-rpc.py
+COPY scripts/rpc-seed-cache.cpp           /tmp/rpc-seed-cache.cpp
 COPY scripts/patch-llama-cuda-graphs-legacy.py /tmp/patch-llama-cuda-graphs-legacy.py
 COPY scripts/prepare-bonsai.py           /tmp/prepare-bonsai.py
 COPY patches/bonsai                     /tmp/bonsai-patches
@@ -129,6 +131,9 @@ RUN case "${BONSAI}" in \
 # as patch-llama-tier-fitting.py), applied to Ollama's normally-fetched
 # llama.cpp copy, not by swapping the source tree wholesale.
 
+# GGML_RPC=ON builds the llama.cpp RPC backend (libggml-rpc.so) and the rpc-server tool:
+# a head instance with OLLAMA_RPC_SERVERS adds the GPUs of other hosts to its pool
+# (docs/RPC-POOL.md). Without that variable no RPC device is registered.
 # Step 1: cmake configure — fetches llama.cpp via FetchContent to _deps/llama_cpp-src/
 # Separated from build so patches can be applied in between.
 RUN if [ "${BONSAI}" = ON ]; then \
@@ -141,6 +146,7 @@ RUN if [ "${BONSAI}" = ON ]; then \
           -DGGML_CUDA_FA=${GGML_CUDA_FA} \
           -DGGML_CUDA_PEER_MAX_BATCH_SIZE=512 \
           -DGGML_CPU_ALL_VARIANTS=ON \
+          -DGGML_RPC=ON \
     && echo "fit.cpp partial-fill patch applied via patch-llama-tier-fitting.py (no fork clone needed)"
 
 # Step 2: apply this fork's Python patches to the fetched llama.cpp source.
@@ -201,6 +207,19 @@ RUN mkdir -p /runtime \
     && find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name 'libnccl.so*' -exec cp -P {} /runtime/cuda_v12/ \; 2>/dev/null || true \
     && ls -lh /runtime/ /runtime/cuda_v12/
 
+# Cross-host pool: both RPC parts must be in the image, and rpc-seed-cache (fills the
+# rpc-server tensor cache from a local GGUF) is built against the GGUF reader of the
+# same llama.cpp revision. Separate RUN: the collection step above ends in "|| true".
+# llama.cpp b11351 names the binary ggml-rpc-server; the link keeps the documented path
+# /usr/lib/ollama/rpc-server stable.
+RUN test -x /runtime/ggml-rpc-server && test -e /runtime/libggml-rpc.so \
+    && ln -s ggml-rpc-server /runtime/rpc-server \
+    && g++ -O2 -std=c++17 -pthread \
+         -I /src/build/llama-server-cuda_v12/_deps/llama_cpp-src/ggml/include \
+         /tmp/rpc-seed-cache.cpp -o /runtime/rpc-seed-cache \
+         "$(find /runtime -maxdepth 1 -name 'libggml-base.so*' | sort | head -n 1)" -Wl,-rpath,'$ORIGIN' \
+    && LD_LIBRARY_PATH=/runtime /runtime/rpc-seed-cache --help
+
 # Go patches — applied before go build:
 # 1. Tier-aware FA: enable FA when model uses only fast GPUs (CC >= 7.0)
 RUN python3 /tmp/patch-ollama-fa.py /src
@@ -218,6 +237,9 @@ RUN python3 /tmp/patch-ollama-discovery.py /src
 # 5. MTP default: OLLAMA_DRAFT_NUM_PREDICT as server-wide draft_num_predict default,
 #    so pool-style containers without the proxy are protected from the Maxwell MTP crash.
 RUN python3 /tmp/patch-ollama-mtp-default.py /src
+# 6. Cross-host pool: OLLAMA_RPC_SERVERS=host:port,... adds --rpc to the model launch and
+#    bypasses the pool logic that counts local CUDA devices only. Needs selectGPUPool (2.).
+RUN python3 /tmp/patch-ollama-rpc.py /src
 
 RUN if [ "${BONSAI}" = ON ]; then \
       cp BONSAI_SOURCE.json /runtime/BONSAI_SOURCE.json \

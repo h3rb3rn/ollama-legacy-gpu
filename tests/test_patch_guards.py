@@ -18,7 +18,7 @@ def load(name):
 class CompatibilityGuards(unittest.TestCase):
     def test_missing_upstream_files_fail_the_build(self):
         with tempfile.TemporaryDirectory() as root:
-            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn', 'patch-llama-pipeline-parallel',
+            for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-ollama-rpc', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn', 'patch-llama-pipeline-parallel',
                          'patch-llama-input-gpu', 'patch-llama-tier-fitting', 'patch-llama-jinja-tojson'):
                 with self.subTest(patch=name):
                     result = subprocess.run([sys.executable, str(SCRIPTS / (name + '.py')), root],
@@ -34,6 +34,31 @@ class CompatibilityGuards(unittest.TestCase):
             self.assertTrue(module.patch(path))
             first = path.read_text()
             self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), first)
+
+    def test_rpc_patch_needs_pool_patch_is_idempotent_and_opt_in(self):
+        pool = load('patch-ollama-dynamic-pool')
+        rpc = load('patch-ollama-rpc')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'llama_server.go'
+            upstream = ('\tparams = appendFlashAttentionArgs(params, launch.gpus)\n'
+                        '// LlamaServerFlashAttention\nfunc LlamaServerFlashAttention() {}\n')
+            path.write_text(upstream)
+            self.assertFalse(rpc.patch(path))
+            self.assertEqual(path.read_text(), upstream)
+            self.assertTrue(pool.patch(path))
+            self.assertTrue(rpc.patch(path))
+            first = path.read_text()
+            self.assertEqual(first.count('func llamaServerRPCServers() string'), 1)
+            self.assertEqual(first.count('params = append(params, "--rpc", _rpc)'), 1)
+            # --rpc only with OLLAMA_RPC_SERVERS set, and never as LLAMA_ARG_RPC (would reach the discovery)
+            self.assertIn('if _rpc := llamaServerRPCServers(); _rpc != "" {', first)
+            self.assertNotIn('LLAMA_ARG_RPC', first)
+            # the early return sits in selectGPUPool, in front of the fast-pool decision
+            pool_body = first[first.index('func selectGPUPool('):]
+            self.assertLess(pool_body.index('if llamaServerRPCServers() != "" {'),
+                            pool_body.index('fastDevices := os.Getenv("OLLAMA_FAST_GPU_DEVICES")'))
+            self.assertTrue(rpc.patch(path))
             self.assertEqual(path.read_text(), first)
 
     def test_removed_split_buffer_requires_both_device_selections(self):

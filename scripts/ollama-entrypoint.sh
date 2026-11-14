@@ -81,7 +81,8 @@ if [[ -f "$SCALE_OVERRIDE" ]]; then
 fi
 
 echo "[entrypoint] Effective GPU config:"
-echo "  CUDA_VISIBLE_DEVICES     = ${CUDA_VISIBLE_DEVICES:0:60}..."
+_cvd="${CUDA_VISIBLE_DEVICES:-<not set: all GPUs>}"
+echo "  CUDA_VISIBLE_DEVICES     = ${_cvd:0:60}..."
 echo "  OLLAMA_GPU_TIER_THRESHOLD = ${OLLAMA_GPU_TIER_THRESHOLD:-0}"
 echo "  OLLAMA_FLASH_ATTENTION   = ${OLLAMA_FLASH_ATTENTION:-<not set>}"
 echo "  OLLAMA_FAST_POOL_VRAM_GB = ${OLLAMA_FAST_POOL_VRAM_GB:-<not set>}"
