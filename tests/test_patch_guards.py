@@ -19,7 +19,7 @@ class CompatibilityGuards(unittest.TestCase):
     def test_missing_upstream_files_fail_the_build(self):
         with tempfile.TemporaryDirectory() as root:
             for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn', 'patch-llama-pipeline-parallel',
-                         'patch-llama-input-gpu', 'patch-llama-tier-fitting', 'patch-llama-jinja-tojson'):
+                         'patch-llama-input-gpu', 'patch-llama-tier-fitting', 'patch-llama-jinja-tojson', 'patch-llama-nccl-config'):
                 with self.subTest(patch=name):
                     result = subprocess.run([sys.executable, str(SCRIPTS / (name + '.py')), root],
                                             capture_output=True, timeout=10)
@@ -190,6 +190,24 @@ class CompatibilityGuards(unittest.TestCase):
         self.assertIn('LLM_ARCH_KOLIBRI1', patch_text)
         self.assertNotIn('\n+++ b/conversion/', patch_text)
 
+
+    def test_nccl_config_patch_guards_maxctas_and_is_idempotent(self):
+        module = load('patch-llama-nccl-config')
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'ggml-cuda.cu'
+            path.write_text('unrelated\n')
+            self.assertFalse(module.patch(path))
+            upstream = ('    const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;\n' + module.OLD)
+            path.write_text(upstream)
+            self.assertTrue(module.patch(path))
+            patched = path.read_text()
+            self.assertIn('#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 17, 1)', patched)
+            self.assertIn('GGML_UNUSED(cc);', patched)
+            # the member is only reached inside the version guard
+            self.assertLess(patched.index('#if NCCL_VERSION_CODE'), patched.index('config.maxCTAs'))
+            self.assertLess(patched.index('config.maxCTAs'), patched.index('#else'))
+            self.assertTrue(module.patch(path))
+            self.assertEqual(path.read_text(), patched)
 
 if __name__ == '__main__':
     unittest.main()
