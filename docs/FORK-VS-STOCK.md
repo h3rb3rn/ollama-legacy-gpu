@@ -58,6 +58,9 @@ llama.cpp:
 - `patch-llama-kolibri1.py` – applies `patches/kolibri1/kolibri1-llama.cpp.patch` (runtime part of the patch from
   `Hob-forge/Kolibri-1-GGUF`, MIT): gating mode `SIGMOID_LOGIT_ADD`, model graph, tokenizer type `kolibri1`. Without the patch
   no Kolibri-1 GGUF loads. The script touches `src/CMakeLists.txt` so that the `models/*.cpp` glob is re-evaluated.
+- `patch-llama-jev-decision.py` – decision model type `jev` for the `/v1/systemone` server (`autotrust/JEV`, `Atlas3D/JEV-27B-VL-GGUF`): without it
+  a GGUF with `<arch>.decision.type = jev` fails with `unsupported decision model type: jev`. Ported by hand from `llama.cpp-jev.patch`
+  (server part only); model independent, verbalizer ids, biases and temperatures come from the GGUF keys `<arch>.decision.*`.
 - `patch-llama-jinja-tojson.py` – `tojson` compatibility.
 - `patch-llama-cuda-graphs-legacy.py` – opt-in for CUDA graphs on CC < 7.0.
 
@@ -65,7 +68,7 @@ llama.cpp:
 
 | Patch | cuda11-legacy | cuda12-maxwell | cuda13-rtx |
 | --- | --- | --- | --- |
-| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, vmm-peer-access, kolibri1, jinja-tojson | yes | yes | yes |
+| tier-fitting, fit-nextn, input-gpu, pipeline-parallel, vmm-peer-access, kolibri1, jev-decision, jinja-tojson | yes | yes | yes |
 | fa, dynamic-pool, batch | yes | yes | yes |
 | discovery, mtp-default | no | yes | yes |
 | cuda-graphs-legacy | no | yes | no |

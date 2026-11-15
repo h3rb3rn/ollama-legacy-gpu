@@ -19,7 +19,7 @@ class CompatibilityGuards(unittest.TestCase):
     def test_missing_upstream_files_fail_the_build(self):
         with tempfile.TemporaryDirectory() as root:
             for name in ('patch-ollama-fa', 'patch-ollama-dynamic-pool', 'patch-ollama-batch', 'patch-ollama-discovery', 'patch-ollama-mtp-default', 'patch-llama-cuda-graphs-legacy', 'patch-llama-fit-nextn', 'patch-llama-pipeline-parallel',
-                         'patch-llama-input-gpu', 'patch-llama-tier-fitting', 'patch-llama-jinja-tojson', 'patch-llama-nccl-config'):
+                         'patch-llama-input-gpu', 'patch-llama-tier-fitting', 'patch-llama-jinja-tojson', 'patch-llama-nccl-config', 'patch-llama-jev-decision'):
                 with self.subTest(patch=name):
                     result = subprocess.run([sys.executable, str(SCRIPTS / (name + '.py')), root],
                                             capture_output=True, timeout=10)
@@ -208,6 +208,35 @@ class CompatibilityGuards(unittest.TestCase):
             self.assertLess(patched.index('config.maxCTAs'), patched.index('#else'))
             self.assertTrue(module.patch(path))
             self.assertEqual(path.read_text(), patched)
+
+    def test_jev_decision_patch_is_atomic_and_idempotent(self):
+        module = load('patch-llama-jev-decision')
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            (base / 'common').mkdir()
+            (base / 'common' / 'common.h').write_text('unrelated\n')
+            # anchors are missing: the patch fails and writes nothing
+            self.assertFalse(module.patch(base))
+            self.assertEqual((base / 'common' / 'common.h').read_text(), 'unrelated\n')
+            # a tree in which every anchor occurs exactly once
+            sources = {}
+            for rel, old, _ in module.EDITS:
+                sources[rel] = sources.get(rel, '') + old
+            for rel, text in sources.items():
+                (base / rel).parent.mkdir(parents=True, exist_ok=True)
+                (base / rel).write_text(text)
+            self.assertTrue(module.patch(base))
+            patched = {rel: (base / rel).read_text() for rel in sources}
+            self.assertIn('COMMON_DECISION_TYPE_JEV', patched[Path('common/common.h')])
+            self.assertTrue(module.patch(base))
+            self.assertEqual(patched, {rel: (base / rel).read_text() for rel in sources})
+            # a duplicated anchor is refused and the tree stays as it was
+            (base / 'tools/server/server-decision.h').write_text(sources[Path('tools/server/server-decision.h')] * 2)
+            (base / 'common' / 'common.h').write_text(sources[Path('common/common.h')])
+            before = (base / 'common' / 'common.cpp').read_text()
+            (base / 'common' / 'common.cpp').write_text(sources[Path('common/common.cpp')])
+            self.assertFalse(module.patch(base))
+            self.assertEqual((base / 'common' / 'common.cpp').read_text(), sources[Path('common/common.cpp')])
 
 if __name__ == '__main__':
     unittest.main()
