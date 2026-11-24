@@ -10,25 +10,33 @@ The patch compiles the DGX Spark setting only when the NCCL headers have the mem
 The setting is irrelevant for the GPUs of these images (CC 3.7 to 9.0); with newer NCCL nothing changes.
 """
 
+import re
 import sys
 from pathlib import Path
 
 PATCH_GUARD = "// [NCCL config patch]"
 SOURCE_FILE = Path("ggml") / "src" / "ggml-cuda" / "ggml-cuda.cu"
 
-OLD = '''    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK) {
-        config.maxCTAs = 8;
-    }
-'''
-NEW = '''    ''' + PATCH_GUARD + ''' ncclConfig_t::maxCTAs exists from NCCL 2.17.1 on; older headers (Ubuntu 22.04: 2.16.5) do not compile it
-#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 17, 1)
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK) {
-        config.maxCTAs = 8;
-    }
-#else
-    GGML_UNUSED(cc);
-#endif
-'''
+# llama.cpp renamed GGML_CUDA_CC_DGX_SPARK to GGML_CUDA_CC_GB10 (b12651, Ollama v0.40.18); accept both.
+OLD_RE = re.compile(
+    r"(?P<indent>[ \t]*)if \(GGML_CUDA_CC_IS_NVIDIA\(cc\) && cc == (?P<const>GGML_CUDA_CC_(?:DGX_SPARK|GB10))\) \{\n"
+    r"[ \t]*config\.maxCTAs = 8;\n"
+    r"[ \t]*\}\n"
+)
+
+
+def build_new(m: re.Match) -> str:
+    i = m.group("indent")
+    return (
+        f"{i}{PATCH_GUARD} ncclConfig_t::maxCTAs exists from NCCL 2.17.1 on; older headers (Ubuntu 22.04: 2.16.5) do not compile it\n"
+        f"#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 17, 1)\n"
+        f"{i}if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == {m.group('const')}) {{\n"
+        f"{i}    config.maxCTAs = 8;\n"
+        f"{i}}}\n"
+        f"#else\n"
+        f"{i}GGML_UNUSED(cc);\n"
+        f"#endif\n"
+    )
 
 
 def find_sources(root: Path):
@@ -45,10 +53,10 @@ def patch(path: Path) -> bool:
     if PATCH_GUARD in content:
         print(f"  Already patched: {path}")
         return True
-    if content.count(OLD) != 1:
+    if len(OLD_RE.findall(content)) != 1:
         print(f"  ERROR: DGX Spark maxCTAs block not found exactly once in {path}", file=sys.stderr)
         return False
-    path.write_text(content.replace(OLD, NEW, 1))
+    path.write_text(OLD_RE.sub(build_new, content, count=1))
     print(f"  NCCL maxCTAs guard applied to {path}")
     return True
 

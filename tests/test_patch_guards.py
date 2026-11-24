@@ -197,17 +197,23 @@ class CompatibilityGuards(unittest.TestCase):
             path = Path(root) / 'ggml-cuda.cu'
             path.write_text('unrelated\n')
             self.assertFalse(module.patch(path))
-            upstream = ('    const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;\n' + module.OLD)
-            path.write_text(upstream)
-            self.assertTrue(module.patch(path))
-            patched = path.read_text()
-            self.assertIn('#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 17, 1)', patched)
-            self.assertIn('GGML_UNUSED(cc);', patched)
-            # the member is only reached inside the version guard
-            self.assertLess(patched.index('#if NCCL_VERSION_CODE'), patched.index('config.maxCTAs'))
-            self.assertLess(patched.index('config.maxCTAs'), patched.index('#else'))
-            self.assertTrue(module.patch(path))
-            self.assertEqual(path.read_text(), patched)
+            # llama.cpp renamed the constant (DGX_SPARK -> GB10, b12651): both spellings must be patched
+            for const in ('GGML_CUDA_CC_DGX_SPARK', 'GGML_CUDA_CC_GB10'):
+                upstream = ('    const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;\n'
+                            f'    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == {const}) {{\n'
+                            '        config.maxCTAs = 8;\n'
+                            '    }\n')
+                path.write_text(upstream)
+                self.assertTrue(module.patch(path))
+                patched = path.read_text()
+                self.assertIn('#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 17, 1)', patched)
+                self.assertIn(f'cc == {const}', patched)
+                self.assertIn('GGML_UNUSED(cc);', patched)
+                # the member is only reached inside the version guard
+                self.assertLess(patched.index('#if NCCL_VERSION_CODE'), patched.index('config.maxCTAs'))
+                self.assertLess(patched.index('config.maxCTAs'), patched.index('#else'))
+                self.assertTrue(module.patch(path))
+                self.assertEqual(path.read_text(), patched)
 
     def test_jev_decision_patch_is_atomic_and_idempotent(self):
         module = load('patch-llama-jev-decision')
